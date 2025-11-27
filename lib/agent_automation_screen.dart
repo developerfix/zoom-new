@@ -106,6 +106,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   // Currently dragged card index
   int? _draggedCardIndex;
+  final ValueNotifier<Offset> _currentDragOffset = ValueNotifier(Offset.zero);
 
   // Connection state
   List<Connection> _connections = [];
@@ -165,6 +166,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   @override
   void dispose() {
     _historyDebounceTimer?.cancel();
+    _currentDragOffset.dispose();
     super.dispose();
   }
   void _deleteCard(int cardIndex) {
@@ -1176,16 +1178,23 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
                             // Connection lines layer - BEHIND cards
                             Positioned.fill(
                               child: IgnorePointer(
-                                child: CustomPaint(
-                                  key: ValueKey('connections_${_connections.length}_${_currentScale}_${_offset.dx}_${_offset.dy}_${_cards.map((c) => '${c.position.dx}_${c.position.dy}').join('_')}'),
-                                  painter: ConnectionPainter(
-                                    connections: _connections,
-                                    cards: _cards,
-                                    scale: _currentScale,
-                                    offset: _offset,
-                                    hoveredConnectionId: _hoveredConnectionId,
-                                    actualPortPositions: _buildActualPortPositions(),
-                                  ),
+                                child: ValueListenableBuilder<Offset>(
+                                  valueListenable: _currentDragOffset,
+                                  builder: (context, dragOffset, child) {
+                                    return CustomPaint(
+                                      key: ValueKey('connections_${_connections.length}_${_currentScale}_${_offset.dx}_${_offset.dy}_${_cards.map((c) => '${c.position.dx}_${c.position.dy}').join('_')}'),
+                                      painter: ConnectionPainter(
+                                        connections: _connections,
+                                        cards: _cards,
+                                        scale: _currentScale,
+                                        offset: _offset,
+                                        hoveredConnectionId: _hoveredConnectionId,
+                                        actualPortPositions: _buildActualPortPositions(),
+                                        draggedCardIndex: _draggedCardIndex,
+                                        dragOffset: dragOffset,
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
                             ),
@@ -1364,6 +1373,124 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     );
   }
 
+  // Helper method to build a single card widget
+  Widget _buildCardWidget(DraggableCard card, int index) {
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedCard = _cards[index]; // 👈 select this card
+          _hoveredCardIndex = index;     // 👈 keep it highlighted
+        });
+      },
+      child: DraggableCardWidget(
+        key: ValueKey('${card.id}_${card.textContent}'),
+        card: card,
+        index: index,
+        isSelected: _selectedCard == _cards[index],
+        currentScale: _currentScale, // Pass current scale to the card
+        onPanStart: (details) {
+          setState(() {
+            _draggedCardIndex = index;
+            _currentDragOffset.value = Offset.zero;
+          });
+          _bringToFront(index); // Bring to front when dragging starts
+        },
+        onCardSelected: () {
+          setState(() {
+            _selectedCard = _cards[index]; // 👈 switch right panel to this card
+          });
+        },
+        onPanUpdate: (details) {
+          if (_draggedCardIndex == index) {
+            double baseSensitivity = 1.0;
+            double sensitivity = baseSensitivity;
+            if (_currentScale < 0.8) {
+              // Zoomed out: reduce sensitivity but not too much
+              sensitivity = 0.5 + 0.7 * (_currentScale); // Ranges from 0.3 at 0.1x to 1.0 at 1.0x
+            } else {
+              // Zoomed in: can be more sensitive
+              sensitivity = 1.0 + 0.5 * (_currentScale - 1.0); // Gradually increases beyond 1.0x
+            }
+
+            // Apply sensitivity to the movement - NO setState!
+            Offset adjustedDelta = details.delta * sensitivity;
+            _currentDragOffset.value += adjustedDelta;
+          }
+        },
+        onPanEnd: (details) {
+          // Apply accumulated offset to actual position
+          if (_draggedCardIndex == index) {
+            _cards[index].position += _currentDragOffset.value;
+          }
+          setState(() {
+            _draggedCardIndex = null;
+            _currentDragOffset.value = Offset.zero;
+          });
+          _saveToHistory();
+        },
+        onHoverEnter: () {
+          _hoveredCardIndex = index;
+          _bringToFront(index); // Bring to front when hovering
+        },
+        onHoverExit: () {
+          setState(() {
+            _hoveredCardIndex = null;
+          });
+        },
+        isConnectedAndHovered: _getConnectedCardIndices().contains(index) || index == _hoveredCardIndex,
+        onPortDragStart: _onPortDragStart,
+        onPortDragUpdate: _onPortDragUpdate,
+        onPortDragEnd: _onPortDragEnd,
+        connectedPorts: _connectedPorts,
+        getPortKey: _getPortKey,
+        targetedPortKey: _nearestTargetPort != null && _nearestTargetPort!['setVarIndex'] != null
+            ? '${_nearestTargetPort!['cardIndex']}_${_nearestTargetPort!['setVarIndex']}'
+            : null,
+        isTargetedForConnection: _nearestTargetPort != null &&
+            _nearestTargetPort!['cardIndex'] == index &&
+            _nearestTargetPort!['side'] == PortSide.left,
+        onSetVariableRemoved: (cardIndex, setVarIndex) {
+          setState(() {
+            // Remove connections that use this SetVariable port and rebuild others with updated indices
+            _connections = _connections
+                .where((c) =>
+                    !(c.fromCardIndex == cardIndex && c.fromPortIndex == setVarIndex) &&
+                    !(c.toCardIndex == cardIndex && c.toPortIndex == setVarIndex))
+                .map((c) => Connection(
+                      id: c.id,
+                      fromCardIndex: c.fromCardIndex,
+                      toCardIndex: c.toCardIndex,
+                      fromSide: c.fromSide,
+                      toSide: c.toSide,
+                      fromPortIndex: (c.fromCardIndex == cardIndex && c.fromPortIndex != null && c.fromPortIndex! > setVarIndex)
+                          ? c.fromPortIndex! - 1
+                          : c.fromPortIndex,
+                      toPortIndex: (c.toCardIndex == cardIndex && c.toPortIndex != null && c.toPortIndex! > setVarIndex)
+                          ? c.toPortIndex! - 1
+                          : c.toPortIndex,
+                    ))
+                .toList();
+
+            // Rebuild _connectedPorts from remaining connections
+            _connectedPorts.clear();
+            for (final c in _connections) {
+              final fromPortKey = c.fromPortIndex != null
+                  ? '${c.fromCardIndex}_${c.fromSide.name}_${c.fromPortIndex}'
+                  : '${c.fromCardIndex}_${c.fromSide.name}';
+              final toPortKey = c.toPortIndex != null
+                  ? '${c.toCardIndex}_${c.toSide.name}_${c.toPortIndex}'
+                  : '${c.toCardIndex}_${c.toSide.name}';
+              _connectedPorts.add(fromPortKey);
+              _connectedPorts.add(toPortKey);
+            }
+          });
+        },
+        onDelete: () => _deleteCard(index),
+        onDuplicate: () => _duplicateCard(index),
+      ),
+    );
+  }
+
   // Helper method to get cards sorted by z-index
   List<Widget> _getSortedCards() {
     List<int> sortedIndices = List.generate(_cards.length, (index) => index)
@@ -1372,127 +1499,32 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     return sortedIndices.map((index) {
       DraggableCard card = _cards[index];
 
+      // For dragged cards, use ValueListenableBuilder to rebuild only this card
+      if (_draggedCardIndex == index) {
+        return ValueListenableBuilder<Offset>(
+          valueListenable: _currentDragOffset,
+          builder: (context, dragOffset, child) {
+            return Positioned(
+              left: card.position.dx * _currentScale + _offset.dx + dragOffset.dx,
+              top: card.position.dy * _currentScale + _offset.dy + dragOffset.dy,
+              child: child!,
+            );
+          },
+          child: Transform.scale(
+            scale: _currentScale,
+            alignment: Alignment.topLeft,
+            child: _buildCardWidget(card, index),
+          ),
+        );
+      }
+
       return Positioned(
         left: card.position.dx * _currentScale + _offset.dx,
         top: card.position.dy * _currentScale + _offset.dy,
         child: Transform.scale(
           scale: _currentScale,
-          alignment: Alignment.topLeft, // Scale from top-left to match position calculation
-          child: GestureDetector(
-            onTap: () {
-              setState(() {
-                _selectedCard = _cards[index]; // 👈 select this card
-                _hoveredCardIndex = index;     // 👈 keep it highlighted
-              });
-            },
-            child: DraggableCardWidget(
-              key: ValueKey('${card.id}_${card.textContent}'),
-              card: card,
-              index: index,
-              isSelected: _selectedCard == _cards[index],
-              currentScale: _currentScale, // Pass current scale to the card
-              onPanStart: (details) {
-                setState(() {
-                  _draggedCardIndex = index;
-                });
-                _bringToFront(index); // Bring to front when dragging starts
-              },
-              onCardSelected: () {
-                setState(() {
-                  _selectedCard = _cards[index]; // 👈 switch right panel to this card
-                });
-              },
-             // part that calculates how the mouse moves a card node at a given zoom level is inside
-            
-              onPanUpdate: (details) {
-                if (_draggedCardIndex == index) {
-                  setState(() {
-                    double baseSensitivity = 1.0;
-                    double sensitivity = baseSensitivity;
-                    if (_currentScale < 0.8) {
-                      // Zoomed out: reduce sensitivity but not too much
-                      sensitivity = 0.5 + 0.7 * (_currentScale); // Ranges from 0.3 at 0.1x to 1.0 at 1.0x
-                    } else {
-                      // Zoomed in: can be more sensitive
-                      sensitivity = 1.0 + 0.5 * (_currentScale - 1.0); // Gradually increases beyond 1.0x
-                    }
-            
-                    // Apply sensitivity to the movement
-                    Offset adjustedDelta = details.delta * sensitivity;
-                    _cards[index].position += adjustedDelta;
-                  });
-                }
-              },
-              onPanEnd: (details) {
-                setState(() {
-                  _draggedCardIndex = null;
-                });
-                _saveToHistory(); //  ADD THIS
-            
-              },
-              onHoverEnter: () {
-                _hoveredCardIndex = index;
-
-                _bringToFront(index); // Bring to front when hovering
-              },
-
-              onHoverExit: () {
-                setState(() {
-                  _hoveredCardIndex = null;
-                });
-              },
-              isConnectedAndHovered: _getConnectedCardIndices().contains(index) || index == _hoveredCardIndex,
-              onPortDragStart: _onPortDragStart,
-              onPortDragUpdate: _onPortDragUpdate,
-              onPortDragEnd: _onPortDragEnd,
-              connectedPorts: _connectedPorts,
-              getPortKey: _getPortKey,
-              targetedPortKey: _nearestTargetPort != null && _nearestTargetPort!['setVarIndex'] != null
-                  ? '${_nearestTargetPort!['cardIndex']}_${_nearestTargetPort!['setVarIndex']}'
-                  : null,
-              isTargetedForConnection: _nearestTargetPort != null &&
-                  _nearestTargetPort!['cardIndex'] == index &&
-                  _nearestTargetPort!['side'] == PortSide.left,
-              onSetVariableRemoved: (cardIndex, setVarIndex) {
-                setState(() {
-                  // Remove connections that use this SetVariable port and rebuild others with updated indices
-                  _connections = _connections
-                      .where((c) =>
-                          !(c.fromCardIndex == cardIndex && c.fromPortIndex == setVarIndex) &&
-                          !(c.toCardIndex == cardIndex && c.toPortIndex == setVarIndex))
-                      .map((c) => Connection(
-                            id: c.id,
-                            fromCardIndex: c.fromCardIndex,
-                            toCardIndex: c.toCardIndex,
-                            fromSide: c.fromSide,
-                            toSide: c.toSide,
-                            fromPortIndex: (c.fromCardIndex == cardIndex && c.fromPortIndex != null && c.fromPortIndex! > setVarIndex)
-                                ? c.fromPortIndex! - 1
-                                : c.fromPortIndex,
-                            toPortIndex: (c.toCardIndex == cardIndex && c.toPortIndex != null && c.toPortIndex! > setVarIndex)
-                                ? c.toPortIndex! - 1
-                                : c.toPortIndex,
-                          ))
-                      .toList();
-            
-                  // Rebuild _connectedPorts from remaining connections
-                  _connectedPorts.clear();
-                  for (final c in _connections) {
-                    final fromPortKey = c.fromPortIndex != null
-                        ? '${c.fromCardIndex}_${c.fromSide.name}_${c.fromPortIndex}'
-                        : '${c.fromCardIndex}_${c.fromSide.name}';
-                    final toPortKey = c.toPortIndex != null
-                        ? '${c.toCardIndex}_${c.toSide.name}_${c.toPortIndex}'
-                        : '${c.toCardIndex}_${c.toSide.name}';
-                    _connectedPorts.add(fromPortKey);
-                    _connectedPorts.add(toPortKey);
-                  }
-                });
-              },
-              onDelete: () => _deleteCard(index),
-              onDuplicate: () => _duplicateCard(index),
-            ),
-          ),
+          alignment: Alignment.topLeft,
+          child: _buildCardWidget(card, index),
         ),
       );
     }).toList();

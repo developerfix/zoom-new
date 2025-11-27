@@ -106,6 +106,8 @@ class ConnectionPainter extends CustomPainter {
   final Offset offset;
   final String? hoveredConnectionId;
   final Map<String, Offset>? actualPortPositions;
+  final int? draggedCardIndex;
+  final Offset dragOffset;
 
   ConnectionPainter({
     required this.connections,
@@ -114,6 +116,8 @@ class ConnectionPainter extends CustomPainter {
     required this.offset,
     this.hoveredConnectionId,
     this.actualPortPositions,
+    this.draggedCardIndex,
+    this.dragOffset = Offset.zero,
   });
 
   @override
@@ -355,20 +359,25 @@ class ConnectionPainter extends CustomPainter {
     final cardX = card.position.dx * scale + offset.dx;
     final cardY = card.position.dy * scale + offset.dy;
 
+    // Apply drag offset if this is the dragged card
+    final additionalOffset = (cardIndex != null && cardIndex == draggedCardIndex)
+        ? dragOffset
+        : Offset.zero;
+
     double portX;
     double portY;
 
     if (side == PortSide.left) {
-      portX = cardX + leftPortX * scale;
-      portY = cardY + leftPortY * scale;
+      portX = cardX + leftPortX * scale + additionalOffset.dx;
+      portY = cardY + leftPortY * scale + additionalOffset.dy;
     } else {
       // Right port - use measured values
-      portX = cardX + rightPortX * scale;
+      portX = cardX + rightPortX * scale + additionalOffset.dx;
       if (portIndex != null) {
         final portYInCard = firstPortY + (portIndex * portSpacing);
-        portY = cardY + portYInCard * scale;
+        portY = cardY + portYInCard * scale + additionalOffset.dy;
       } else {
-        portY = cardY + leftPortY * scale;
+        portY = cardY + leftPortY * scale + additionalOffset.dy;
       }
     }
 
@@ -382,7 +391,9 @@ class ConnectionPainter extends CustomPainter {
         oldDelegate.connections != connections ||
         oldDelegate.hoveredConnectionId != hoveredConnectionId ||
         oldDelegate.scale != scale ||
-        oldDelegate.offset != offset) {
+        oldDelegate.offset != offset ||
+        oldDelegate.draggedCardIndex != draggedCardIndex ||
+        oldDelegate.dragOffset != dragOffset) {
       return true;
     }
 
