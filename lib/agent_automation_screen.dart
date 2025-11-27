@@ -76,6 +76,9 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Canvas key for coordinate conversion
   final GlobalKey _canvasKey = GlobalKey();
 
+  // Track mouse position for zoom-to-cursor
+  Offset _lastMousePosition = Offset.zero;
+
   final _rightPanelKey = GlobalKey<RightPanelState>();
 
 
@@ -843,47 +846,80 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     // On large screens, it stays true (initial value)
   }
   void _updateScale(double newScale) {
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox == null) return;
+
+    final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+
     setState(() {
+      final oldScale = _currentScale;
+
+      if (oldScale == newScale) return; // No change in scale
+
+      // Calculate world position at viewport center before zoom
+      // Screen to world: worldPos = (screenPos - offset) / scale
+      final worldX = (viewportCenter.dx - _offset.dx) / oldScale;
+      final worldY = (viewportCenter.dy - _offset.dy) / oldScale;
+
+      // Calculate new offset to keep world point at same screen position
+      // Screen pos = worldPos * newScale + newOffset
+      // Therefore: newOffset = screenPos - worldPos * newScale
+      _offset = Offset(
+        viewportCenter.dx - worldX * newScale,
+        viewportCenter.dy - worldY * newScale,
+      );
       _currentScale = newScale;
     });
-    // Schedule multiple rebuilds to ensure GlobalKey positions update after layout
+
+    // Single rebuild to update GlobalKey positions after layout
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() {});
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
-        });
-      }
+      if (mounted) setState(() {});
     });
   }
 
   void _zoomIn() {
-    setState(() {
-      _currentScale = (_currentScale + zoomStep).clamp(minScale, maxScale);
-    });
-    // Schedule multiple rebuilds to ensure GlobalKey positions update after layout
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() {});
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
-        });
-      }
-    });
+    // Zoom toward viewport center for button clicks
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox != null) {
+      final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+      _zoomTowardPoint(zoomStep, viewportCenter);
+    }
   }
 
   void _zoomOut() {
+    // Zoom toward viewport center for button clicks
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox != null) {
+      final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+      _zoomTowardPoint(-zoomStep, viewportCenter);
+    }
+  }
+
+  void _zoomTowardPoint(double deltaScale, Offset focalPoint) {
     setState(() {
-      _currentScale = (_currentScale - zoomStep).clamp(minScale, maxScale);
+      final oldScale = _currentScale;
+      final newScale = (oldScale + deltaScale).clamp(minScale, maxScale);
+
+      if (oldScale == newScale) return; // No change in scale
+
+      // Calculate world position under cursor before zoom
+      // Screen to world: worldPos = (screenPos - offset) / scale
+      final worldX = (focalPoint.dx - _offset.dx) / oldScale;
+      final worldY = (focalPoint.dy - _offset.dy) / oldScale;
+
+      // Calculate new offset to keep world point at same screen position
+      // Screen pos = worldPos * newScale + newOffset
+      // Therefore: newOffset = screenPos - worldPos * newScale
+      _offset = Offset(
+        focalPoint.dx - worldX * newScale,
+        focalPoint.dy - worldY * newScale,
+      );
+      _currentScale = newScale;
     });
-    // Schedule multiple rebuilds to ensure GlobalKey positions update after layout
+
+    // Single rebuild to update GlobalKey positions after layout
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() {});
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
-        });
-      }
+      if (mounted) setState(() {});
     });
   }
   String? _getIconKeyFromData(IconData icon) {
@@ -1092,65 +1128,39 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
                     },
                     onPointerSignal: (PointerSignalEvent event) {
                       if (_isMagicBuilderActive || _isCanvasLocked) return; // 👈 blocks scroll zoom
-                  
-                      // Optional: if you have custom scroll-to-zoom logic, handle it here
-                      // Otherwise, just returning early is enough to block it
+
+                      // Handle scroll wheel zoom
+                      if (event is PointerScrollEvent) {
+                        // Track mouse position for zoom
+                        _lastMousePosition = event.localPosition;
+
+                        // Zoom based on scroll direction
+                        final double zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
+                        _zoomTowardPoint(zoomDelta, event.localPosition);
+                      }
                     },
-                    child: InteractiveViewer(
-                  
-                      transformationController: TransformationController(),
-                      boundaryMargin: const EdgeInsets.all(double.infinity),
-                      // scaleEnabled: false,
-                      // panEnabled: false,
-                      // panEnabled: !_isMagicBuilderActive,
-                      // scaleEnabled: !_isMagicBuilderActive,
-                      panEnabled: !_isMagicBuilderActive && !_isCanvasLocked,
-                      scaleEnabled: !_isMagicBuilderActive && !_isCanvasLocked,
-                      minScale: 0.01,
-                      maxScale: 100.0,
-                      onInteractionStart: (ScaleStartDetails details) {
-                        _startFocalPoint = details.focalPoint;
-                        _startOffset = _offset;
-                        _startScale = _currentScale;
+                    child: GestureDetector(
+                      onPanStart: (details) {
+                        if (_isMagicBuilderActive || _isCanvasLocked) return;
+                        // Just tracking start for potential use
                       },
-                      onInteractionEnd: (ScaleEndDetails details) {
-                        // After zoom/pan gesture ends, force rebuild to update GlobalKey positions
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted) {
-                            setState(() {});
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (mounted) setState(() {});
-                            });
-                          }
+                      onPanUpdate: (details) {
+                        if (_isMagicBuilderActive || _isCanvasLocked) return;
+                        setState(() {
+                          // Add the pan delta to current offset
+                          _offset += details.delta;
                         });
                       },
-                      onInteractionUpdate: (ScaleUpdateDetails details) {
-                        if (_isMagicBuilderActive || _isCanvasLocked) return;
-                  
-                        if (_twoFingerZoomHandler.fingerCount < 2) {
-                          setState(() {
-                            // Calculate new scale
-                            double newScale = (_startScale * details.scale).clamp(minScale, maxScale);
-                  
-                            // Calculate the focal point in the coordinate system before scaling
-                            Offset focalPointBefore = (_startFocalPoint - _startOffset) / _startScale;
-                  
-                            // Calculate focal point delta for panning
-                            Offset focalPointDelta = details.focalPoint - _startFocalPoint;
-                  
-                            Offset focalPointAfter = (details.focalPoint - (_startOffset + focalPointDelta)) / newScale;
-                  
-                            // Adjust offset to keep focal point stable during zoom
-                            Offset zoomAdjustment = (focalPointAfter - focalPointBefore) * newScale;
-                  
-                            // Apply pan and zoom
-                            _offset = _startOffset + focalPointDelta + zoomAdjustment;
-                            _currentScale = newScale;
-                          });
-                        }
+                      onPanEnd: (details) {
+                        // Update port positions after pan
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) setState(() {});
+                        });
                       },
                       child: MouseRegion(
                         onHover: (event) {
+                          // Track mouse position for zoom-to-cursor
+                          _lastMousePosition = event.localPosition;
                           // Use localPosition since we're inside the canvas
                           _onConnectionHover(event.localPosition);
                         },
