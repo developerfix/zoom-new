@@ -1402,25 +1402,19 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
         },
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
-            double baseSensitivity = 1.0;
-            double sensitivity = baseSensitivity;
-            if (_currentScale < 0.8) {
-              // Zoomed out: reduce sensitivity but not too much
-              sensitivity = 0.5 + 0.7 * (_currentScale); // Ranges from 0.3 at 0.1x to 1.0 at 1.0x
-            } else {
-              // Zoomed in: can be more sensitive
-              sensitivity = 1.0 + 0.5 * (_currentScale - 1.0); // Gradually increases beyond 1.0x
-            }
-
-            // Apply sensitivity to the movement - NO setState!
-            Offset adjustedDelta = details.delta * sensitivity;
-            _currentDragOffset.value += adjustedDelta;
+            // details.delta is in local scaled coordinates (because GestureDetector is inside Transform.scale)
+            // Convert to screen space by multiplying by current scale
+            _currentDragOffset.value += details.delta * _currentScale;
           }
         },
         onPanEnd: (details) {
           // Apply accumulated offset to actual position
+          // IMPORTANT: Convert screen-space drag offset to world-space by dividing by scale
           if (_draggedCardIndex == index) {
-            _cards[index].position += _currentDragOffset.value;
+            _cards[index].position += Offset(
+              _currentDragOffset.value.dx / _currentScale,
+              _currentDragOffset.value.dy / _currentScale,
+            );
           }
           setState(() {
             _draggedCardIndex = null;

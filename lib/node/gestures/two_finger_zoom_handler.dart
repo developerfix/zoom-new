@@ -53,14 +53,18 @@ class TwoFingerZoomHandler {
 
     if (touchPositions.length == 2) {
       double currentDistance = _calculateDistance();
-      double scaleChange = currentDistance / lastDistance;
-      double newScale = (currentScale * scaleChange).clamp(minScale, maxScale);
+      if (lastDistance > 0) {
+        double scaleChange = currentDistance / lastDistance;
+        double newScale = (currentScale * scaleChange).clamp(minScale, maxScale);
 
-      if (newScale != currentScale) {
-        _currentAnimatingScale = newScale;
-        onScaleChanged?.call(newScale);
-        onStatusChanged?.call('Two-Finger Zoom: ${newScale.toStringAsFixed(2)}x');
+        if (newScale != currentScale) {
+          _currentAnimatingScale = newScale;
+          onScaleChanged?.call(newScale);
+          onStatusChanged?.call('Two-Finger Zoom: ${newScale.toStringAsFixed(2)}x');
+        }
       }
+      // CRITICAL: Update lastDistance for next frame
+      lastDistance = currentDistance;
     }
   }
 
@@ -68,8 +72,13 @@ class TwoFingerZoomHandler {
     touchPositions.remove(event.pointer);
 
     if (touchPositions.isEmpty) {
+      // Reset for next gesture
+      lastDistance = 0.0;
       // Start spring animation to settle the scale
       _startSpringAnimation(_currentAnimatingScale);
+    } else if (touchPositions.length == 2) {
+      // If we still have 2 fingers, recalculate initial distance
+      lastDistance = _calculateDistance();
     }
   }
 
@@ -77,7 +86,10 @@ class TwoFingerZoomHandler {
     touchPositions.remove(event.pointer);
 
     if (touchPositions.isEmpty) {
+      lastDistance = 0.0;
       _startSpringAnimation(_currentAnimatingScale);
+    } else if (touchPositions.length == 2) {
+      lastDistance = _calculateDistance();
     }
   }
 
