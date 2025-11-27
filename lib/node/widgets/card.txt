@@ -1,0 +1,1093 @@
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import '../models/draggable_card.dart';
+
+// Set Variable model
+class SetVariable {
+  String name;
+  String value;
+
+  SetVariable({
+    required this.name,
+    required this.value,
+  });
+}
+
+// Map to store set variables for each card
+final Map<int, List<SetVariable>> _cardSetVariables = {};
+
+// Extend the DraggableCard model to include set variables
+extension SetVariableExtension on DraggableCard {
+  List<SetVariable> get setVariables {
+    // Initialize the list if it doesn't exist
+    if (!_cardSetVariables.containsKey(this.hashCode)) {
+      _cardSetVariables[this.hashCode] = [];
+    }
+    return _cardSetVariables[this.hashCode]!;
+  }
+
+  void addSetVariable(String name, String value) {
+    if (!_cardSetVariables.containsKey(this.hashCode)) {
+      _cardSetVariables[this.hashCode] = [];
+    }
+    _cardSetVariables[this.hashCode]!.add(SetVariable(name: name, value: value));
+  }
+
+  void removeSetVariable(int index) {
+    if (_cardSetVariables.containsKey(this.hashCode)) {
+      final list = _cardSetVariables[this.hashCode]!;
+      if (index >= 0 && index < list.length) {
+        list.removeAt(index);
+      }
+    }
+  }
+}
+
+// Draggable Card Widget
+class DraggableCardWidget extends StatefulWidget {
+  final DraggableCard card;
+  final int index;
+  final double currentScale;
+  final Function(DragStartDetails) onPanStart;
+  final Function(DragUpdateDetails) onPanUpdate;
+  final Function(DragEndDetails) onPanEnd;
+  final VoidCallback? onHoverEnter; // Add callback for hover
+
+  const DraggableCardWidget({
+    Key? key,
+    required this.card,
+    required this.index,
+    required this.currentScale,
+    required this.onPanStart,
+    required this.onPanUpdate,
+    required this.onPanEnd,
+    this.onHoverEnter,
+  }) : super(key: key);
+
+  @override
+  State<DraggableCardWidget> createState() => _DraggableCardWidgetState();
+}
+
+// In the DraggableCardWidget class
+class _DraggableCardWidgetState extends State<DraggableCardWidget> {
+  bool _isHovering = false;
+  Offset? _lastMousePosition;
+  late TextEditingController _textController;
+  int? _hoveredSetVariableIndex; // Track which set variable is being hovered
+  bool _isPortHovering = false; // Track port hover state
+  bool _isPortActive = false; // Track port active state
+  bool _portPressed = false; // Add this to track port press state
+
+
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize the text controller with the card's current text content
+    _textController = TextEditingController(text: widget.card.textContent);
+  }
+
+  @override
+  void didUpdateWidget(DraggableCardWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Update the controller text if the card's textContent changes from outside
+    if (oldWidget.card.textContent != widget.card.textContent) {
+      _textController.text = widget.card.textContent;
+    }
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
+
+  void _addSetVariable() {
+    // Add a new set variable with default values
+    widget.card.addSetVariable('variable_name', 'variable_value');
+    setState(() {
+      // Rebuild to show the new set variable
+    });
+  }
+
+  void _removeSetVariable(int index) {
+    widget.card.removeSetVariable(index);
+    setState(() {
+      // Rebuild to remove the set variable
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onPanStart: (details) {
+        widget.onPanStart(details);
+      },
+      onPanUpdate: (details) {
+        widget.onPanUpdate(details);
+      },
+      onPanEnd: (details) {
+        widget.onPanEnd(details);
+      },
+      child: MouseRegion(
+        onEnter: (event) {
+          _lastMousePosition = event.position;
+          setState(() => _isHovering = true);
+          // Bring card to front when mouse enters
+          if (widget.onHoverEnter != null) {
+            widget.onHoverEnter!();
+          }
+        },
+        onExit: (event) {
+          setState(() => _isHovering = false);
+          _hoveredSetVariableIndex = null; // Reset when card is no longer hovered
+        },
+        onHover: (event) {
+          // Only print if mouse moved significantly
+          if (_lastMousePosition == null ||
+              (_lastMousePosition! - event.position).distance > 5.0) {
+            _lastMousePosition = event.position;
+          }
+        },
+        child:// Replace the main Container in DraggableCardWidget's build method with this:
+        Container(
+          width: 200,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: _isHovering ? Colors.black : Colors.grey,
+              width: _isHovering ? 2 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 4,
+                offset: Offset(2, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min, // This ensures the column only takes needed space
+            crossAxisAlignment: CrossAxisAlignment.stretch, // Makes children stretch to full width
+            children: [
+              // Replace the Stack widget in your build method with this:
+              Stack(
+                clipBehavior: Clip.none, // This allows children to render outside the stack bounds
+                children: [
+                  // Main title container
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      border: Border(
+                        bottom: BorderSide(
+                          color: Colors.grey.shade300,
+                        ),
+                      ),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // Left side: Label icon and title
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.label,
+                              size: 16,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              widget.card.title,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black87,
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Right side: Horizontal dots icon
+                        PopupMenuButton<String>(
+                          icon: Icon(
+                            Icons.more_horiz,
+                            size: 16,
+                            color: Colors.grey[600],
+                          ),
+                          onSelected: (String result) {
+                            if (result == 'duplicate') {
+                              // Handle duplicate action
+                            } else if (result == 'delete') {
+                              // Handle delete action
+                            }
+                          },
+                          itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+                            PopupMenuItem<String>(
+                              value: 'duplicate',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.content_copy, size: 14),
+                                  SizedBox(width: 8),
+                                  Text('Duplicate', style: TextStyle(fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                            PopupMenuItem<String>(
+                              value: 'delete',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.delete, size: 14),
+                                  SizedBox(width: 8),
+                                  Text('Delete', style: TextStyle(fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Port positioned outside the container aligned with the label icon
+                  Positioned(
+                    left: -8, // Position it outside the container (negative value)
+                    top: 11, // Aligned with the label icon (16px icon + 2px padding = ~11px from top)
+                    child: MouseRegion(
+                      onEnter: (event) => setState(() => _isPortHovering = true),
+                      onExit: (event) => setState(() => _isPortHovering = false),
+                      child: GestureDetector(
+                        onTapDown: (event) => setState(() => _isPortActive = true),
+                        onTapUp: (event) => setState(() => _isPortActive = false),
+                        onTapCancel: () => setState(() => _isPortActive = false),
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: _isPortActive || _isPortHovering ? Colors.green : Colors.blue,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                color: Colors.grey[100],
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child:
+                  TextField(
+                    controller: _textController,
+                    decoration: InputDecoration(
+                      hintText: 'Enter text...',
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black87,
+                    ),
+                    minLines: 5, // Set minimum number of lines
+                    maxLines: 8, // Increase maximum number of lines
+                    onChanged: (value) {
+                      widget.card.textContent = value;
+                    },
+                  ),
+                ),
+              ),
+              // Third section: Transition with plus
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0), // Reduced vertical padding
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  border: Border(
+                    top: BorderSide(
+                      color: Colors.grey.shade300,
+                    ),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Transition',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.add,
+                        size: 16,
+                      ),
+                      onPressed: _addSetVariable,
+                      padding: EdgeInsets.zero, // Remove default padding
+                      constraints: BoxConstraints.tightFor(width: 24, height: 24), // Smaller button
+                    ),
+                  ],
+                ),
+              ),
+              // Only add set variables if there are any
+              if (widget.card.setVariables.isNotEmpty) ...[
+                ...widget.card.setVariables.asMap().entries.map((entry) {
+                  int i = entry.key;
+                  return SetVariableWidget(
+                    setVariable: entry.value,
+                    index: i,
+                    onRemove: _removeSetVariable,
+                    cardHovering: _isHovering,
+                    isHovered: _hoveredSetVariableIndex == i,
+                    onHover: (bool isHovered) {
+                      setState(() {
+                        if (isHovered) {
+                          _hoveredSetVariableIndex = i;
+                        } else if (_hoveredSetVariableIndex == i) {
+                          _hoveredSetVariableIndex = null;
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+// Set Variable Widget
+class SetVariableWidget extends StatefulWidget {
+  final SetVariable setVariable;
+  final int index;
+  final Function(int) onRemove;
+  final bool cardHovering;
+  final bool isHovered;
+  final Function(bool) onHover;
+
+  const SetVariableWidget({
+    Key? key,
+    required this.setVariable,
+    required this.index,
+    required this.onRemove,
+    required this.cardHovering,
+    required this.isHovered,
+    required this.onHover,
+  }) : super(key: key);
+
+  @override
+  State<SetVariableWidget> createState() => _SetVariableWidgetState();
+}
+
+class _SetVariableWidgetState extends State<SetVariableWidget> {
+  bool _isRightPortHovering = false;
+  bool _isRightPortActive = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (event) => widget.onHover(true),
+      onExit: (event) => widget.onHover(false),
+      child: Container(
+        padding: const EdgeInsets.all(8.0),
+        decoration: BoxDecoration(
+          color: Colors.grey[100], // Same color as text area
+          border: Border(
+            top: BorderSide(
+              color: Colors.grey.shade400, // Matching border
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Show close icon only when the specific set variable is hovered
+            if (widget.isHovered)
+              IconButton(
+                icon: Icon(
+                  Icons.close,
+                  size: 16,
+                  color: Colors.grey[600],
+                ),
+                onPressed: () {
+                  widget.onRemove(widget.index); // Remove this set variable
+                },
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints.tightFor(width: 20, height: 20),
+              )
+            else
+              Container(width: 28), // Spacer to maintain alignment when icon is hidden
+            const SizedBox(width: 4),
+            Icon(
+              Icons.settings,
+              size: 16,
+              color: Colors.grey[600],
+            ),
+            const SizedBox(width: 4),
+            Text(
+              'Set Variable ${widget.index + 1}',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: Colors.grey[700],
+              ),
+            ),
+            const Spacer(),
+            // Right side port with additional padding to move it further right
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0), // Adjust this value to move it further right
+              child: MouseRegion(
+                onEnter: (event) => setState(() => _isRightPortHovering = true),
+                onExit: (event) => setState(() => _isRightPortHovering = false),
+                child: GestureDetector(
+                  onTapDown: (event) => setState(() => _isRightPortActive = true),
+                  onTapUp: (event) => setState(() => _isRightPortActive = false),
+                  onTapCancel: () => setState(() => _isRightPortActive = false),
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: _isRightPortActive || _isRightPortHovering ? Colors.green : Colors.red, // Red for output port
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+//
+// import 'package:flutter/gestures.dart';
+// import 'package:flutter/material.dart';
+// import '../models/draggable_card.dart';
+//
+// // Set Variable model
+// class SetVariable {
+//   String name;
+//   String value;
+//   SetVariable({
+//     required this.name,
+//     required this.value,
+//   });
+// }
+//
+// // Map to store set variables for each card
+// final Map<int, List<SetVariable>> _cardSetVariables = {};
+//
+// // Extend the DraggableCard model to include set variables
+// extension SetVariableExtension on DraggableCard {
+//   List<SetVariable> get setVariables {
+//     // Initialize the list if it doesn't exist
+//     if (!_cardSetVariables.containsKey(this.hashCode)) {
+//       _cardSetVariables[this.hashCode] = [];
+//     }
+//     return _cardSetVariables[this.hashCode]!;
+//   }
+//   void addSetVariable(String name, String value) {
+//     if (!_cardSetVariables.containsKey(this.hashCode)) {
+//       _cardSetVariables[this.hashCode] = [];
+//     }
+//     _cardSetVariables[this.hashCode]!.add(SetVariable(name: name, value: value));
+//   }
+//   void removeSetVariable(int index) {
+//     if (_cardSetVariables.containsKey(this.hashCode)) {
+//       final list = _cardSetVariables[this.hashCode]!;
+//       if (index >= 0 && index < list.length) {
+//         list.removeAt(index);
+//       }
+//     }
+//   }
+// }
+//
+// // Draggable Card Widget
+// class DraggableCardWidget extends StatefulWidget {
+//   final DraggableCard card;
+//   final int index;
+//   final double currentScale;
+//   final Function(DragStartDetails) onPanStart;
+//   final Function(DragUpdateDetails) onPanUpdate;
+//   final Function(DragEndDetails) onPanEnd;
+//   final VoidCallback? onHoverEnter; // Add callback for hover
+//   const DraggableCardWidget({
+//     Key? key,
+//     required this.card,
+//     required this.index,
+//     required this.currentScale,
+//     required this.onPanStart,
+//     required this.onPanUpdate,
+//     required this.onPanEnd,
+//     this.onHoverEnter,
+//   }) : super(key: key);
+//
+//   @override
+//   State<DraggableCardWidget> createState() => _DraggableCardWidgetState();
+// }
+//
+// // In the DraggableCardWidget class
+// class _DraggableCardWidgetState extends State<DraggableCardWidget> {
+//   bool _isHovering = false;
+//   Offset? _lastMousePosition;
+//   late TextEditingController _textController;
+//   int? _hoveredSetVariableIndex; // Track which set variable is being hovered
+//   bool _isPortHovering = false; // Track port hover state
+//   bool _isPortActive = false; // Track port active state
+//   Offset? _dragStartPoint;
+//   Offset? _dragEndPoint;
+//   // NEW: Local coordinates for painting
+//   Offset? _localDragStartPoint;
+//   Offset? _localDragEndPoint;
+//   bool _isDraggingLine = false;
+//   final GlobalKey _inputPortKey = GlobalKey(); // Add this key
+//   // NEW: GlobalKey for the outer Stack to convert coordinates
+//   final GlobalKey _stackKey = GlobalKey();
+//
+//   @override
+//   void initState() {
+//     super.initState();
+//     // Initialize the text controller with the card's current text content
+//     _textController = TextEditingController(text: widget.card.textContent);
+//   }
+//
+//   @override
+//   void didUpdateWidget(DraggableCardWidget oldWidget) {
+//     super.didUpdateWidget(oldWidget);
+//     // Update the controller text if the card's textContent changes from outside
+//     if (oldWidget.card.textContent != widget.card.textContent) {
+//       _textController.text = widget.card.textContent;
+//     }
+//   }
+//
+//   @override
+//   void dispose() {
+//     _textController.dispose();
+//     super.dispose();
+//   }
+//
+//   void _addSetVariable() {
+//     // Add a new set variable with default values
+//     widget.card.addSetVariable('variable_name', 'variable_value');
+//     setState(() {
+//       // Rebuild to show the new set variable
+//     });
+//   }
+//
+//   void _removeSetVariable(int index) {
+//     widget.card.removeSetVariable(index);
+//     setState(() {
+//       // Rebuild to remove the set variable
+//     });
+//   }
+//
+//   // NEW: Helper to convert global to local coordinates using the Stack's RenderBox
+//   void _updateLocalPoints() {
+//     if (_stackKey.currentContext != null && _dragStartPoint != null && _dragEndPoint != null) {
+//       final RenderBox stackRenderBox = _stackKey.currentContext!.findRenderObject() as RenderBox;
+//       setState(() {
+//         _localDragStartPoint = stackRenderBox.globalToLocal(_dragStartPoint!);
+//         _localDragEndPoint = stackRenderBox.globalToLocal(_dragEndPoint!);
+//       });
+//     }
+//   }
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return Stack(
+//       key: _stackKey,  // NEW: Attach key here
+//       clipBehavior: Clip.none,  // NEW: Disable clipping to allow line to extend outside card bounds
+//       children: [
+//         GestureDetector(
+//           onPanStart: (details) {
+//             widget.onPanStart(details);
+//           },
+//           onPanUpdate: (details) {
+//             widget.onPanUpdate(details);
+//           },
+//           onPanEnd: (details) {
+//             widget.onPanEnd(details);
+//           },
+//           child: MouseRegion(
+//             onEnter: (event) {
+//               _lastMousePosition = event.position;
+//               setState(() => _isHovering = true);
+//               if (widget.onHoverEnter != null) {
+//                 widget.onHoverEnter!();
+//               }
+//             },
+//             onExit: (event) {
+//               setState(() => _isHovering = false);
+//               _hoveredSetVariableIndex = null;
+//             },
+//             onHover: (event) {
+//               if (_isDraggingLine) {
+//                 setState(() {
+//                   _dragEndPoint = event.position;
+//                 });
+//                 _updateLocalPoints();  // NEW: Update local points on hover/move
+//               }
+//               if (_lastMousePosition == null ||
+//                   (_lastMousePosition! - event.position).distance > 5.0) {
+//                 _lastMousePosition = event.position;
+//               }
+//             },
+//             child: Container(
+//               width: 200,
+//               decoration: BoxDecoration(
+//                 color: Colors.white,
+//                 borderRadius: BorderRadius.circular(8),
+//                 border: Border.all(
+//                   color: _isHovering ? Colors.black : Colors.grey,
+//                   width: _isHovering ? 2 : 1,
+//                 ),
+//                 boxShadow: [
+//                   BoxShadow(
+//                     color: Colors.black26,
+//                     blurRadius: 4,
+//                     offset: Offset(2, 2),
+//                   ),
+//                 ],
+//               ),
+//               child: Column(
+//                 mainAxisSize: MainAxisSize.min, // This ensures the column only takes needed space
+//                 crossAxisAlignment: CrossAxisAlignment.stretch, // Makes children stretch to full width
+//                 children: [
+//                   // Replace the Stack widget in your build method with this:
+//                   Stack(
+//                     clipBehavior: Clip.none, // This allows children to render outside the stack bounds
+//                     children: [
+//                       // Main title container
+//                       Container(
+//                         padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+//                         decoration: BoxDecoration(
+//                           color: Colors.grey[200],
+//                           border: Border(
+//                             bottom: BorderSide(
+//                               color: Colors.grey.shade300,
+//                             ),
+//                           ),
+//                           borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+//                         ),
+//                         child: Row(
+//                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//                           children: [
+//                             // Left side: Label icon and title
+//                             Row(
+//                               children: [
+//                                 Icon(
+//                                   Icons.label,
+//                                   size: 16,
+//                                   color: Colors.grey,
+//                                 ),
+//                                 const SizedBox(width: 4),
+//                                 Text(
+//                                   widget.card.title,
+//                                   style: TextStyle(
+//                                     fontSize: 12,
+//                                     fontWeight: FontWeight.bold,
+//                                     color: Colors.black87,
+//                                   ),
+//                                 ),
+//                               ],
+//                             ),
+//                             // Right side: Horizontal dots icon
+//                             PopupMenuButton<String>(
+//                               icon: Icon(
+//                                 Icons.more_horiz,
+//                                 size: 16,
+//                                 color: Colors.grey[600],
+//                               ),
+//                               onSelected: (String result) {
+//                                 if (result == 'duplicate') {
+//                                   // Handle duplicate action
+//                                 } else if (result == 'delete') {
+//                                   // Handle delete action
+//                                 }
+//                               },
+//                               itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+//                                 PopupMenuItem<String>(
+//                                   value: 'duplicate',
+//                                   child: Row(
+//                                     children: [
+//                                       Icon(Icons.content_copy, size: 14),
+//                                       SizedBox(width: 8),
+//                                       Text('Duplicate', style: TextStyle(fontSize: 12)),
+//                                     ],
+//                                   ),
+//                                 ),
+//                                 PopupMenuItem<String>(
+//                                   value: 'delete',
+//                                   child: Row(
+//                                     children: [
+//                                       Icon(Icons.delete, size: 14),
+//                                       SizedBox(width: 8),
+//                                       Text('Delete', style: TextStyle(fontSize: 12)),
+//                                     ],
+//                                   ),
+//                                 ),
+//                               ],
+//                             ),
+//                           ],
+//                         ),
+//                       ),
+//                       Positioned(
+//                         left: -8,
+//                         top: 11,
+//                         child: MouseRegion(
+//                           onEnter: (event) => setState(() => _isPortHovering = true),
+//                           onExit: (event) => setState(() => _isPortHovering = false),
+//                           child: GestureDetector(
+//                             key: _inputPortKey,
+//                             onPanStart: (DragStartDetails details) async {
+//                               await Future.delayed(Duration.zero); // Ensure widget is rendered
+//                               final RenderBox renderBox = _inputPortKey.currentContext!.findRenderObject() as RenderBox;
+//                               final Offset localPosition = Offset(10, 10); // Center of 20x20 circle
+//                               _dragStartPoint = renderBox.localToGlobal(localPosition);
+//                               // Add debug print
+//                               print('Input Port - Local: $localPosition, Global: $_dragStartPoint');
+//                               _dragEndPoint = _dragStartPoint;
+//                               _updateLocalPoints();  // NEW: Convert to local immediately
+//                               setState(() {
+//                                 _isDraggingLine = true;
+//                                 _isPortActive = true;
+//                               });
+//                             },
+//                             onPanUpdate: (DragUpdateDetails details) {
+//                               _dragEndPoint = details.globalPosition;
+//                               _updateLocalPoints();  // NEW: Convert to local on update
+//                               setState(() {});
+//                             },
+//                             onPanEnd: (DragEndDetails details) {
+//                               setState(() {
+//                                 _isDraggingLine = false;
+//                                 _isPortActive = false;
+//                                 _localDragStartPoint = null;
+//                                 _localDragEndPoint = null;
+//                               });
+//                             },
+//                             child: Container(
+//                               width: 20,
+//                               height: 20,
+//                               decoration: BoxDecoration(
+//                                 color: _isPortActive || _isPortHovering ? Colors.green : Colors.blue,
+//                                 shape: BoxShape.circle,
+//                                 border: Border.all(
+//                                   color: Colors.white,
+//                                   width: 2,
+//                                 ),
+//                               ),
+//                             ),
+//                           ),
+//                         ),
+//                       ),
+//                     ],
+//                   ),
+//                   Container(
+//                     color: Colors.grey[100],
+//                     child: Padding(
+//                       padding: const EdgeInsets.all(8.0),
+//                       child: TextField(
+//                         controller: _textController,
+//                         decoration: InputDecoration(
+//                           hintText: 'Enter text...',
+//                           border: InputBorder.none,
+//                           contentPadding: EdgeInsets.zero,
+//                         ),
+//                         style: const TextStyle(
+//                           fontSize: 12,
+//                           color: Colors.black87,
+//                         ),
+//                         minLines: 5, // Set minimum number of lines
+//                         maxLines: 8, // Increase maximum number of lines
+//                         onChanged: (value) {
+//                           widget.card.textContent = value;
+//                         },
+//                       ),
+//                     ),
+//                   ),
+//                   // Third section: Transition with plus
+//                   Container(
+//                     padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0), // Reduced vertical padding
+//                     decoration: BoxDecoration(
+//                       color: Colors.grey[300],
+//                       border: Border(
+//                         top: BorderSide(
+//                           color: Colors.grey.shade300,
+//                         ),
+//                       ),
+//                     ),
+//                     child: Row(
+//                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+//                       children: [
+//                         const Text(
+//                           'Transition',
+//                           style: TextStyle(
+//                             fontSize: 12,
+//                             fontWeight: FontWeight.w500,
+//                             color: Colors.black87,
+//                           ),
+//                         ),
+//                         IconButton(
+//                           icon: const Icon(
+//                             Icons.add,
+//                             size: 16,
+//                           ),
+//                           onPressed: _addSetVariable,
+//                           padding: EdgeInsets.zero, // Remove default padding
+//                           constraints: BoxConstraints.tightFor(width: 24, height: 24), // Smaller button
+//                         ),
+//                       ],
+//                     ),
+//                   ),
+//                   // Replace this part in your build method where SetVariableWidget is created:
+//                   if (widget.card.setVariables.isNotEmpty) ...[
+//                     ...widget.card.setVariables.asMap().entries.map((entry) {
+//                       int i = entry.key;
+//                       return SetVariableWidget(
+//                         setVariable: entry.value,
+//                         index: i,
+//                         onRemove: _removeSetVariable,
+//                         cardHovering: _isHovering,
+//                         isHovered: _hoveredSetVariableIndex == i,
+//                         onHover: (bool isHovered) {
+//                           setState(() {
+//                             if (isHovered) {
+//                               _hoveredSetVariableIndex = i;
+//                             } else if (_hoveredSetVariableIndex == i) {
+//                               _hoveredSetVariableIndex = null;
+//                             }
+//                           });
+//                         },
+//                         onSetDragStartPoint: (Offset? position) {
+//                           _dragStartPoint = position;
+//                           _updateLocalPoints();  // NEW: Update local
+//                           setState(() {});
+//                         },
+//                         onSetDragEndPoint: (Offset? position) {
+//                           _dragEndPoint = position;
+//                           _updateLocalPoints();  // NEW: Update local
+//                           setState(() {});
+//                         },
+//                         onSetIsDraggingLine: (bool isDragging) {
+//                           setState(() {
+//                             _isDraggingLine = isDragging;
+//                             if (!isDragging) {
+//                               // Reset local coordinates when dragging stops
+//                               _localDragStartPoint = null;
+//                               _localDragEndPoint = null;
+//                               // Also reset global coordinates
+//                               _dragStartPoint = null;
+//                               _dragEndPoint = null;
+//                             }
+//                           });
+//                         },
+//                         // onSetIsDraggingLine: (bool isDragging) {
+//                         //   setState(() {
+//                         //     _isDraggingLine = isDragging;
+//                         //     if (!isDragging) {
+//                         //       // Reset local coordinates when dragging stops
+//                         //       _localDragStartPoint = null;
+//                         //       _localDragEndPoint = null;
+//                         //     }
+//                         //   });
+//                         // },
+//                       );
+//                     }).toList(),
+//                   ],
+//                   // Only add set variables if there are any
+//                 ],
+//               ),
+//             ),
+//           ),
+//         ),
+//         if (_isDraggingLine && _localDragStartPoint != null && _localDragEndPoint != null)
+//           Positioned(
+//             left: 0,
+//             top: 0,
+//             right: 0,
+//             bottom: 0,
+//             child: CustomPaint(
+//               painter: LinePainter(
+//                 startPoint: _localDragStartPoint!,  // NEW: Use local points
+//                 endPoint: _localDragEndPoint!,  // NEW: Use local points
+//                 color: Colors.blue,
+//               ),
+//             ),
+//           ),
+//       ],
+//     );
+//   }
+// }
+//
+// class LinePainter extends CustomPainter {
+//   final Offset startPoint;
+//   final Offset endPoint;
+//   final Color color;
+//   LinePainter({
+//     required this.startPoint,
+//     required this.endPoint,
+//     required this.color,
+//   });
+//
+//   @override
+//   void paint(Canvas canvas, Size size) {
+//     print('Drawing line from $startPoint to $endPoint');
+//     final paint = Paint()
+//       ..color = color
+//       ..strokeWidth = 2.0
+//       ..strokeCap = StrokeCap.round;
+//     canvas.drawLine(startPoint, endPoint, paint);
+//   }
+//
+//   @override
+//   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+// }
+//
+// // Set Variable Widget
+// class SetVariableWidget extends StatefulWidget {
+//   final SetVariable setVariable;
+//   final int index;
+//   final Function(int) onRemove;
+//   final bool cardHovering;
+//   final bool isHovered;
+//   final Function(bool) onHover;
+//   final Function(Offset?) onSetDragStartPoint;
+//   final Function(Offset?) onSetDragEndPoint;
+//   final Function(bool) onSetIsDraggingLine;
+//   const SetVariableWidget({
+//     Key? key,
+//     required this.setVariable,
+//     required this.index,
+//     required this.onRemove,
+//     required this.cardHovering,
+//     required this.isHovered,
+//     required this.onHover,
+//     required this.onSetDragStartPoint,
+//     required this.onSetDragEndPoint,
+//     required this.onSetIsDraggingLine,
+//   }) : super(key: key);
+//
+//   @override
+//   State<SetVariableWidget> createState() => _SetVariableWidgetState();
+// }
+//
+// class _SetVariableWidgetState extends State<SetVariableWidget> {
+//   bool _isRightPortHovering = false;
+//   bool _isRightPortActive = false;
+//   final GlobalKey _portKey = GlobalKey(); // Add this key
+//
+//   @override
+//   Widget build(BuildContext context) {
+//     return MouseRegion(
+//       onEnter: (event) => widget.onHover(true),
+//       onExit: (event) => widget.onHover(false),
+//       child: Container(
+//         padding: const EdgeInsets.all(8.0),
+//         decoration: BoxDecoration(
+//           color: Colors.grey[100], // Same color as text area
+//           border: Border(
+//             top: BorderSide(
+//               color: Colors.grey.shade400, // Matching border
+//             ),
+//           ),
+//         ),
+//         child: Row(
+//           children: [
+//             // Show close icon only when the specific set variable is hovered
+//             if (widget.isHovered)
+//               IconButton(
+//                 icon: Icon(
+//                   Icons.close,
+//                   size: 16,
+//                   color: Colors.grey[600],
+//                 ),
+//                 onPressed: () {
+//                   widget.onRemove(widget.index); // Remove this set variable
+//                 },
+//                 padding: EdgeInsets.zero,
+//                 constraints: BoxConstraints.tightFor(width: 20, height: 20),
+//               )
+//             else
+//               Container(width: 28), // Spacer to maintain alignment when icon is hidden
+//             const SizedBox(width: 4),
+//             Icon(
+//               Icons.settings,
+//               size: 16,
+//               color: Colors.grey[600],
+//             ),
+//             const SizedBox(width: 4),
+//             Text(
+//               'Set Variable ${widget.index + 1}',
+//               style: TextStyle(
+//                 fontSize: 12,
+//                 fontWeight: FontWeight.w500,
+//                 color: Colors.grey[700],
+//               ),
+//             ),
+//             const Spacer(),
+//             Padding(
+//               padding: const EdgeInsets.only(right: 8.0),
+//               child: MouseRegion(
+//                 onEnter: (event) => setState(() => _isRightPortHovering = true),
+//                 onExit: (event) => setState(() => _isRightPortHovering = false),
+//                 child: GestureDetector(
+//                   key: _portKey, // Add the key here
+//                   onPanStart: (DragStartDetails details) async {
+//                     await Future.delayed(Duration.zero); // Ensure widget is rendered
+//                     final RenderBox renderBox = _portKey.currentContext!.findRenderObject() as RenderBox;
+//                     final Offset localPosition = Offset(8, 8); // Center of 16x16 circle
+//                     final globalPosition = renderBox.localToGlobal(localPosition);
+//                     // Add debug print
+//                     print('Output Port - Local: $localPosition, Global: $globalPosition');
+//                     widget.onSetDragStartPoint(globalPosition);
+//                     widget.onSetDragEndPoint(globalPosition);
+//                     setState(() {
+//                       _isRightPortActive = true;
+//                     });
+//                     widget.onSetIsDraggingLine(true);
+//                   },
+//                   onPanUpdate: (DragUpdateDetails details) {
+//                     widget.onSetDragEndPoint(details.globalPosition);
+//                   },
+//                   onPanEnd: (DragEndDetails details) {
+//                     setState(() {
+//                       _isRightPortActive = false;
+//                     });
+//                     widget.onSetIsDraggingLine(false);
+//                   },
+//                   child: Container(
+//                     width: 16,
+//                     height: 16,
+//                     decoration: BoxDecoration(
+//                       color: _isRightPortActive || _isRightPortHovering ? Colors.green : Colors.red,
+//                       shape: BoxShape.circle,
+//                       border: Border.all(
+//                         color: Colors.white,
+//                         width: 1,
+//                       ),
+//                     ),
+//                   ),
+//                 ),
+//               ),
+//             ),
+//             // Right side port with additional padding to move it further right
+//           ],
+//         ),
+//       ),
+//     );
+//   }
+// }
