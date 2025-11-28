@@ -13,7 +13,7 @@ class TwoFingerZoomHandler {
   double _targetScale = 1.0;
   double _currentAnimatingScale = 1.0;
 
-  final ValueChanged<double>? onScaleChanged;
+  final void Function(double newScale, Offset focalPoint)? onScaleChanged;
   final ValueChanged<String>? onStatusChanged;
   final VoidCallback? onScaleUpdate;
   final double minScale;
@@ -59,13 +59,25 @@ class TwoFingerZoomHandler {
 
         if (newScale != currentScale) {
           _currentAnimatingScale = newScale;
-          onScaleChanged?.call(newScale);
+          // Calculate focal point (midpoint between two fingers)
+          final focalPoint = _calculateFocalPoint();
+          onScaleChanged?.call(newScale, focalPoint);
           onStatusChanged?.call('Two-Finger Zoom: ${newScale.toStringAsFixed(2)}x');
         }
       }
       // CRITICAL: Update lastDistance for next frame
       lastDistance = currentDistance;
     }
+  }
+
+  Offset _calculateFocalPoint() {
+    if (touchPositions.length < 2) return Offset.zero;
+
+    List<Offset> positions = touchPositions.values.toList();
+    return Offset(
+      (positions[0].dx + positions[1].dx) / 2,
+      (positions[0].dy + positions[1].dy) / 2,
+    );
   }
 
   void handlePointerUp(PointerUpEvent event) {

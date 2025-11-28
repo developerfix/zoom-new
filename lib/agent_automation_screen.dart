@@ -833,7 +833,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   void initState() {
     super.initState();
     _twoFingerZoomHandler = TwoFingerZoomHandler(
-      onScaleChanged: _updateScale,
+      onScaleChanged: (newScale, focalPoint) => _updateScaleAtPoint(newScale, focalPoint),
       onStatusChanged: (String status) {}, // Empty callback since we're not using status
       minScale: minScale,
       maxScale: maxScale,
@@ -847,64 +847,13 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     }
     // On large screens, it stays true (initial value)
   }
-  void _updateScale(double newScale) {
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox == null) return;
-
-    final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-
+  void _updateScaleAtPoint(double newScale, Offset focalPoint) {
     setState(() {
       final oldScale = _currentScale;
 
       if (oldScale == newScale) return; // No change in scale
 
-      // Calculate world position at viewport center before zoom
-      // Screen to world: worldPos = (screenPos - offset) / scale
-      final worldX = (viewportCenter.dx - _offset.dx) / oldScale;
-      final worldY = (viewportCenter.dy - _offset.dy) / oldScale;
-
-      // Calculate new offset to keep world point at same screen position
-      // Screen pos = worldPos * newScale + newOffset
-      // Therefore: newOffset = screenPos - worldPos * newScale
-      _offset = Offset(
-        viewportCenter.dx - worldX * newScale,
-        viewportCenter.dy - worldY * newScale,
-      );
-      _currentScale = newScale;
-    });
-
-    // Single rebuild to update GlobalKey positions after layout
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  void _zoomIn() {
-    // Zoom toward viewport center for button clicks
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox != null) {
-      final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-      _zoomTowardPoint(zoomStep, viewportCenter);
-    }
-  }
-
-  void _zoomOut() {
-    // Zoom toward viewport center for button clicks
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox != null) {
-      final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-      _zoomTowardPoint(-zoomStep, viewportCenter);
-    }
-  }
-
-  void _zoomTowardPoint(double deltaScale, Offset focalPoint) {
-    setState(() {
-      final oldScale = _currentScale;
-      final newScale = (oldScale + deltaScale).clamp(minScale, maxScale);
-
-      if (oldScale == newScale) return; // No change in scale
-
-      // Calculate world position under cursor before zoom
+      // Calculate world position at focal point before zoom
       // Screen to world: worldPos = (screenPos - offset) / scale
       final worldX = (focalPoint.dx - _offset.dx) / oldScale;
       final worldY = (focalPoint.dy - _offset.dy) / oldScale;
@@ -923,6 +872,31 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  void _zoomIn() {
+    // Zoom toward viewport center for button clicks
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox != null) {
+      final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+      final newScale = (_currentScale + zoomStep).clamp(minScale, maxScale);
+      _updateScaleAtPoint(newScale, viewportCenter);
+    }
+  }
+
+  void _zoomOut() {
+    // Zoom toward viewport center for button clicks
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox != null) {
+      final viewportCenter = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+      final newScale = (_currentScale - zoomStep).clamp(minScale, maxScale);
+      _updateScaleAtPoint(newScale, viewportCenter);
+    }
+  }
+
+  void _zoomTowardPoint(double deltaScale, Offset focalPoint) {
+    final newScale = (_currentScale + deltaScale).clamp(minScale, maxScale);
+    _updateScaleAtPoint(newScale, focalPoint);
   }
   String? _getIconKeyFromData(IconData icon) {
     final node = NodeTypes.all.firstWhere(
@@ -1045,13 +1019,14 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
               // Canvas area
               Expanded(
-                child: MouseRegion(
-                  cursor: _draggedCardIndex != null
-                      ? SystemMouseCursors.grabbing   // card is being dragged → grabbing
-                      : (!_isCanvasLocked && !_isMagicBuilderActive)
-                      ? SystemMouseCursors.grab   // canvas is draggable → grab
-                      : SystemMouseCursors.basic, // locked or Magic Builder → default
-                  child: Listener(
+                child: ClipRect(
+                  child: MouseRegion(
+                    cursor: _draggedCardIndex != null
+                        ? SystemMouseCursors.grabbing   // card is being dragged → grabbing
+                        : (!_isCanvasLocked && !_isMagicBuilderActive)
+                        ? SystemMouseCursors.grab   // canvas is draggable → grab
+                        : SystemMouseCursors.basic, // locked or Magic Builder → default
+                    child: Listener(
                     onPointerDown: (PointerDownEvent event) {
                       if (_isMagicBuilderActive || _isCanvasLocked) return;
                       _twoFingerZoomHandler.handlePointerDown(event);
@@ -1168,6 +1143,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
                         },
                         child: Stack(
                           key: _canvasKey,
+                          clipBehavior: Clip.hardEdge,
                           children: [
                             // Infinite dot grid background
                             InfiniteDotGrid(
@@ -1292,7 +1268,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
                     ),
                   ),
                 ),
-
+                ),
               ),
 
               // Right Panel
