@@ -916,31 +916,27 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     return sortedIndices.map((index) {
       final card = _cards[index];
       
-      if (_draggedCardIndex == index) {
-        return ValueListenableBuilder<Offset>(
-          key: ValueKey('card_$index'),
+      // FIXED: Ensure Widget structure is consistent between drag and idle states
+      // to prevent GestureDetector from being disposed (rebuilt with new parent).
+      return Positioned(
+        key: ValueKey('card_$index'),
+        left: card.position.dx * _currentScale + _offset.dx,
+        top: card.position.dy * _currentScale + _offset.dy,
+        child: ValueListenableBuilder<Offset>(
           valueListenable: _currentDragOffset,
-          builder: (_, dragOffset, child) => Positioned(
-            left: card.position.dx * _currentScale + _offset.dx + dragOffset.dx,
-            top: card.position.dy * _currentScale + _offset.dy + dragOffset.dy,
-            child: child!,
-          ),
+          builder: (_, dragOffset, child) {
+            // Only apply drag offset if this is the dragged card
+            final effectiveOffset = (_draggedCardIndex == index) ? dragOffset : Offset.zero;
+            return Transform.translate(
+              offset: effectiveOffset,
+              child: child!,
+            );
+          },
           child: Transform.scale(
             scale: _currentScale,
             alignment: Alignment.topLeft,
             child: _buildCardWidget(card, index),
           ),
-        );
-      }
-
-      return Positioned(
-        key: ValueKey('card_$index'),
-        left: card.position.dx * _currentScale + _offset.dx,
-        top: card.position.dy * _currentScale + _offset.dy,
-        child: Transform.scale(
-          scale: _currentScale,
-          alignment: Alignment.topLeft,
-          child: _buildCardWidget(card, index),
         ),
       );
     }).toList();
@@ -948,10 +944,10 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   Widget _buildCardWidget(DraggableCard card, int index) {
     return GestureDetector(
-      onTap: () => setState(() {
-        _selectedCard = _cards[index];
-        _hoveredCardIndex = index;
-      }),
+      // onTap: () => setState(() {
+      //   _selectedCard = _cards[index];
+      //   _hoveredCardIndex = index;
+      // }),
       child: DraggableCardWidget(
         key: ValueKey('${card.id}_${card.textContent.hashCode}'),
         card: card,
@@ -964,7 +960,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
           _bringToFront(index);
           setState(() {});
         },
-        onCardSelected: () => setState(() => _selectedCard = _cards[index]),
+        // onCardSelected: () => setState(() => _selectedCard = _cards[index]),
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
             _currentDragOffset.value += details.delta * _currentScale;

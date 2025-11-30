@@ -1,11 +1,6 @@
-
 import 'package:flutter/material.dart';
 
 import '../constants/node_types.dart';
-
-
-
-
 
 // ===== SET VARIABLE MODEL (unchanged) =====
 class SetVariable {
@@ -27,11 +22,7 @@ class SetVariable {
   }) : id = id ?? UniqueKey().toString(); // 👈 assign in constructor
 
   Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'name': name,
-      'value': value,
-    };
+    return {'id': id, 'name': name, 'value': value};
   }
 
   factory SetVariable.fromJson(Map<String, dynamic> json) {
@@ -41,7 +32,6 @@ class SetVariable {
       value: json['value'] ?? '',
     );
   }
-
 }
 
 // ===== CARD-SET-VARIABLE STORAGE (unchanged) =====
@@ -121,7 +111,11 @@ class DraggableCard {
       blockInterruptions: blockInterruptions,
       useCustomLLM: useCustomLLM,
       iconKey: iconKey,
-    )..setSetVariables(List<SetVariable>.from(setVariables.map((sv) => SetVariable(name: sv.name, value: sv.value))));
+    )..setSetVariables(
+      List<SetVariable>.from(
+        setVariables.map((sv) => SetVariable(name: sv.name, value: sv.value)),
+      ),
+    );
   }
 
   DraggableCard({
@@ -141,7 +135,7 @@ class DraggableCard {
 
   IconData getIconData() {
     final match = NodeTypes.all.firstWhere(
-          (node) => node['key'] == iconKey,
+      (node) => node['key'] == iconKey,
       orElse: () => {'icon': Icons.label},
     );
     return match['icon'] as IconData;
@@ -200,7 +194,8 @@ class DraggableCard {
   }
 
   Offset? getGlobalPosition() {
-    final RenderBox? renderBox = cardKey.currentContext?.findRenderObject() as RenderBox?;
+    final RenderBox? renderBox =
+        cardKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox != null) {
       return renderBox.localToGlobal(Offset.zero);
     }
@@ -208,7 +203,8 @@ class DraggableCard {
   }
 
   Size? getCardSize() {
-    final RenderBox? renderBox = cardKey.currentContext?.findRenderObject() as RenderBox?;
+    final RenderBox? renderBox =
+        cardKey.currentContext?.findRenderObject() as RenderBox?;
     return renderBox?.size;
   }
 }
