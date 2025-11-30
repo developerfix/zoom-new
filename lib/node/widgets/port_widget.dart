@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import '../models/connection.dart';
 
+/// Optimized port widget with cached decorations for better performance
 class PortWidget extends StatelessWidget {
   final PortSide side;
   final bool isHovering;
   final bool isConnected;
   final bool isDragging;
-  final bool isTargeted;  // True when being targeted by a connection drag
+  final bool isTargeted;
 
   const PortWidget({
     super.key,
@@ -17,51 +18,64 @@ class PortWidget extends StatelessWidget {
     this.isTargeted = false,
   });
 
+  // Cached decorations for performance
+  static final _draggingDecoration = BoxDecoration(
+    shape: BoxShape.circle,
+    color: Colors.blue,
+    border: Border.all(color: Colors.blue.shade700, width: 2),
+    boxShadow: [BoxShadow(color: Colors.blue.withValues(alpha: 0.3), blurRadius: 4, spreadRadius: 1)],
+  );
+
+  static final _targetedDecoration = BoxDecoration(
+    shape: BoxShape.circle,
+    color: Colors.green.shade300,
+    border: Border.all(color: Colors.green.shade700, width: 3),
+    boxShadow: [BoxShadow(color: Colors.green.withValues(alpha: 0.5), blurRadius: 8, spreadRadius: 2)],
+  );
+
+  static final _connectedDecoration = BoxDecoration(
+    shape: BoxShape.circle,
+    color: Colors.green,
+    border: Border.all(color: Colors.green.shade700, width: 2),
+  );
+
+  static final _hoveringDecoration = BoxDecoration(
+    shape: BoxShape.circle,
+    color: Colors.blue.shade200,
+    border: Border.all(color: Colors.grey.shade600, width: 2),
+    boxShadow: [BoxShadow(color: Colors.blue.withValues(alpha: 0.3), blurRadius: 4, spreadRadius: 1)],
+  );
+
+  static final _defaultDecoration = BoxDecoration(
+    shape: BoxShape.circle,
+    color: Colors.grey.shade400,
+    border: Border.all(color: Colors.grey.shade600, width: 2),
+  );
+
+  static const _innerDot = BoxDecoration(
+    shape: BoxShape.circle,
+    color: Colors.white,
+  );
+
+  BoxDecoration _getDecoration() {
+    if (isDragging) return _draggingDecoration;
+    if (isTargeted) return _targetedDecoration;
+    if (isConnected) return _connectedDecoration;
+    if (isHovering) return _hoveringDecoration;
+    return _defaultDecoration;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
       width: 16,
       height: 16,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: isDragging
-            ? Colors.blue
-            : isTargeted
-                ? Colors.green.shade300
-                : isConnected
-                    ? Colors.green
-                    : isHovering
-                        ? Colors.blue.shade200
-                        : Colors.grey.shade400,
-        border: Border.all(
-          color: isDragging
-              ? Colors.blue.shade700
-              : isTargeted
-                  ? Colors.green.shade700
-                  : isConnected
-                      ? Colors.green.shade700
-                      : Colors.grey.shade600,
-          width: isTargeted ? 3 : 2,
-        ),
-        boxShadow: [
-          if (isHovering || isDragging || isTargeted)
-            BoxShadow(
-              color: isTargeted
-                  ? Colors.green.withValues(alpha: 0.5)
-                  : Colors.blue.withValues(alpha: 0.3),
-              blurRadius: isTargeted ? 8 : 4,
-              spreadRadius: isTargeted ? 2 : 1,
-            ),
-        ],
-      ),
-      child: Center(
-        child: Container(
+      decoration: _getDecoration(),
+      child: const Center(
+        child: SizedBox(
           width: 6,
           height: 6,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
-          ),
+          child: DecoratedBox(decoration: _innerDot),
         ),
       ),
     );

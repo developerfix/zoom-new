@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+/// High-performance infinite dot grid using RepaintBoundary and cached Paint objects.
+/// Optimized for smooth panning and zooming like Figma/n8n.
 class InfiniteDotGrid extends StatelessWidget {
   final double scale;
   final Offset offset;
@@ -11,85 +13,78 @@ class InfiniteDotGrid extends StatelessWidget {
     Key? key,
     required this.scale,
     required this.offset,
-    this.color = Colors.grey,
-    this.dotSize = 3.0,
+    this.color = const Color(0xFFBDBDBD), // More visible grey
+    this.dotSize = 2.0,
     this.baseSpacing = 30.0,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    // Calculate scaled dot size (proportional to zoom level)
-    final scaledDotSize = dotSize * scale;
-
-    return CustomPaint(
-      painter: InfiniteDotGridPainter(
-        spacing: baseSpacing * scale,
-        dotSize: scaledDotSize,
-        color: color,
-        offset: offset,
-        scale: scale,
+    return RepaintBoundary(
+      child: SizedBox.expand(
+        child: CustomPaint(
+          painter: _InfiniteDotGridPainter(
+            spacing: baseSpacing * scale,
+            dotSize: (dotSize * scale).clamp(0.8, 5.0),
+            color: color,
+            offset: offset,
+          ),
+          isComplex: true,
+          willChange: true,
+        ),
       ),
-      child: Container(),
     );
   }
 }
 
-class InfiniteDotGridPainter extends CustomPainter {
+class _InfiniteDotGridPainter extends CustomPainter {
   final double spacing;
   final double dotSize;
   final Color color;
   final Offset offset;
-  final double scale;
+  
+  // Cached paint object
+  late final Paint _dotPaint;
 
-  InfiniteDotGridPainter({
+  _InfiniteDotGridPainter({
     required this.spacing,
-    required this.dotSize,  // This is now the scaled size
+    required this.dotSize,
     required this.color,
     required this.offset,
-    required this.scale,
-  });
+  }) {
+    _dotPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    // Calculate the grid offset modulo spacing for infinite looping
-    // This creates the illusion of infinite scrolling
+    // Skip painting if dots would be too dense
+    if (spacing < 5.0) return;
+    
+    // Calculate grid offset for infinite looping effect
     final double offsetX = offset.dx % spacing;
     final double offsetY = offset.dy % spacing;
 
-    // Calculate how many dots we need to draw to cover the screen
-    final int dotsX = (size.width / spacing).ceil() + 2;
-    final int dotsY = (size.height / spacing).ceil() + 2;
+    // Calculate visible range
+    final int endX = (size.width / spacing).ceil() + 2;
+    final int endY = (size.height / spacing).ceil() + 2;
 
-    // Draw dots in grid pattern
-    // Start from -1 to ensure coverage when scrolling
-    for (int i = -1; i < dotsX; i++) {
-      for (int j = -1; j < dotsY; j++) {
-        final x = offsetX + i * spacing;
-        final y = offsetY + j * spacing;
-
-        // Only draw dots that are visible on screen
-        if (x >= -spacing && x <= size.width + spacing &&
-            y >= -spacing && y <= size.height + spacing) {
-          canvas.drawCircle(
-            Offset(x, y),
-            dotSize,  // Use the scaled dot size
-            paint,
-          );
-        }
+    // Draw all dots
+    for (int i = -1; i <= endX; i++) {
+      final double x = offsetX + i * spacing;
+      for (int j = -1; j <= endY; j++) {
+        final double y = offsetY + j * spacing;
+        canvas.drawCircle(Offset(x, y), dotSize, _dotPaint);
       }
     }
   }
 
   @override
-  bool shouldRepaint(InfiniteDotGridPainter oldDelegate) {
+  bool shouldRepaint(_InfiniteDotGridPainter oldDelegate) {
     return oldDelegate.spacing != spacing ||
-        oldDelegate.offset != offset ||
-        oldDelegate.scale != scale ||
-        oldDelegate.color != color ||
-        oldDelegate.dotSize != dotSize;
+           oldDelegate.offset != offset ||
+           oldDelegate.color != color ||
+           oldDelegate.dotSize != dotSize;
   }
 }
