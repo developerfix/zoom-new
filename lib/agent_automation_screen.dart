@@ -852,6 +852,47 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   void _handlePointerSignal(PointerSignalEvent event) {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
+    // PointerPanZoomEvent support: some platforms (desktop touchpads) deliver
+    // pinch gestures as pan/zoom signals instead of GestureDetector scale events.
+    if (event is PointerPanZoomStartEvent) {
+      if (_isScaling) return;
+
+      // Use dynamic access because field names may differ across Flutter versions
+      // and some platforms deliver scale as a multiplicative value, or as a delta.
+      final dyn = event as dynamic;
+      Offset focal = Offset.zero;
+      try {
+        focal = dyn.localPosition ?? dyn.position ?? Offset.zero;
+      } catch (_) {}
+
+      try {
+        // First try absolute scale (multiplicative)
+        if (dyn.scale != null) {
+          final newScale = (_currentScale * (dyn.scale as double)).clamp(minScale, maxScale);
+          _updateScaleAtPoint(newScale, _globalToLocal(focal));
+          return;
+        }
+
+        // Then try relative scale delta
+        if (dyn.scaleDelta != null) {
+          final sd = dyn.scaleDelta as double;
+          final newScale = (_currentScale * (1.0 + sd)).clamp(minScale, maxScale);
+          _updateScaleAtPoint(newScale, _globalToLocal(focal));
+          return;
+        }
+
+        // Some implementations expose zoom or zoomDelta
+        if (dyn.zoom != null) {
+          final zd = dyn.zoom as double;
+          final newScale = (_currentScale * (1.0 + zd)).clamp(minScale, maxScale);
+          _updateScaleAtPoint(newScale, _globalToLocal(focal));
+          return;
+        }
+      } catch (_) {
+        // Ignore and fall through to other handlers
+      }
+    }
+
     if (event is PointerScrollEvent) {
       // If a scale gesture is currently in progress, ignore pointer scroll signals
       if (_isScaling) return;
