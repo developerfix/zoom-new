@@ -91,6 +91,8 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Scale gesture tracking
   final Map<int, Offset> _touchPositions = {};
   double _lastPinchDistance = 0.0;
+  // NEW: Trackpad zoom ke liye base scale variable
+  double _trackpadBaseScale = 1.0;
 
   // Cards and connections
   List<DraggableCard> _cards = [
@@ -665,11 +667,35 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
                 ? SystemMouseCursors.grab
                 : SystemMouseCursors.basic,
         child: Listener(
+          // TOUCHSCREEN GESTURES
           onPointerDown: _handlePointerDown,
           onPointerMove: _handlePointerMove,
           onPointerUp: _handlePointerUp,
           onPointerCancel: _handlePointerCancel,
           onPointerSignal: _handlePointerSignal,
+          
+          // NEW: TRACKPAD GESTURES (Pinch to Zoom & Pan)
+          onPointerPanZoomStart: (event) {
+            if (_isMagicBuilderActive || _isCanvasLocked) return;
+            // Jab trackpad gesture shuru ho, current scale ko save karlein
+            _trackpadBaseScale = _currentScale;
+          },
+          onPointerPanZoomUpdate: (event) {
+            if (_isMagicBuilderActive || _isCanvasLocked) return;
+            
+            // Handle Zoom (Trackpad Pinch)
+            // event.scale 1.0 se alag hai to yeh pinch hai
+            if (event.scale != 1.0) {
+              final newScale = (_trackpadBaseScale * event.scale).clamp(minScale, maxScale);
+              _updateScaleAtPoint(newScale, event.localPosition);
+            } 
+            // Handle Pan (Trackpad 2-finger scroll)
+            // Agar scale 1.0 hai, to yeh sirf scroll/pan hai
+            else if (event.panDelta != Offset.zero) {
+              setState(() => _offset += event.panDelta);
+            }
+          },
+
           child: GestureDetector(
             onPanUpdate: _handlePanUpdate,
             child: MouseRegion(
