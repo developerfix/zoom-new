@@ -674,27 +674,38 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
           onPointerCancel: _handlePointerCancel,
           onPointerSignal: _handlePointerSignal,
           child: GestureDetector(
-            onPanUpdate: _handlePanUpdate,
-            // Support pinch-to-zoom via scale gesture (trackpads and multi-touch)
+            // Use the scale gesture to handle both pinch-to-zoom and single-finger panning.
+            // Having both pan and scale recognizers causes an assertion; scale is a superset.
             onScaleStart: (details) {
               if (_isMagicBuilderActive || _isCanvasLocked) return;
-              // mark scale start and remember base scale
-              _isScaling = true;
+              // Reset scaling flag and remember base scale
+              _isScaling = false;
               _scaleStart = _currentScale;
             },
             onScaleUpdate: (details) {
-              if (!_isScaling || _isMagicBuilderActive || _isCanvasLocked) return;
-              // details.scale is a multiplier relative to the start of the gesture (1.0 means unchanged)
-              final newScale = (_scaleStart * details.scale).clamp(minScale, maxScale);
-              // Use the focal point of the gesture so zoom focuses on the pinch center
-              final focalPoint = details.focalPoint;
-              _updateScaleAtPoint(newScale, _globalToLocal(focalPoint));
+              if (_isMagicBuilderActive || _isCanvasLocked) return;
+
+              // Determine whether this gesture is a scale (pinch) or a pan.
+              final isNowScaling = (details.scale - 1.0).abs() > 0.02;
+
+              if (isNowScaling) {
+                _isScaling = true;
+                final newScale = (_scaleStart * details.scale).clamp(minScale, maxScale);
+                // Use focal point so zoom centers at the pinch location
+                _updateScaleAtPoint(newScale, _globalToLocal(details.focalPoint));
+              } else {
+                // Treat as pan — focalPointDelta represents the movement
+                if (!_isScaling && details.focalPointDelta != Offset.zero) {
+                  setState(() => _offset += details.focalPointDelta);
+                }
+              }
             },
             onScaleEnd: (details) {
+              // reset flag and persist state
               _isScaling = false;
-              // ensure any accumulated history is saved
               _saveToHistory();
             },
+            // (Scale handlers implemented above) - single onScale* implementation handles both pan and pinch
             child: MouseRegion(
               onHover: (event) => _onConnectionHover(event.localPosition),
               child: Stack(
