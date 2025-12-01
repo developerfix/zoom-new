@@ -54,6 +54,9 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   double _currentScale = 1.0;
   Offset _offset = Offset.zero;
   
+  // Trackpad Zoom State
+  double _startZoomScale = 1.0;
+  
   // UI state
   bool _isRightPanelVisible = true;
   bool _isMagicBuilderActive = false;
@@ -385,7 +388,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   Set<int> _getConnectedCardIndices() {
     if (_hoveredCardIndex == null) return {};
     final indices = <int>{};
-    for (final c in _connections) {
+       for (final c in _connections) {
       if (c.fromCardIndex == _hoveredCardIndex) indices.add(c.toCardIndex);
       else if (c.toCardIndex == _hoveredCardIndex) indices.add(c.fromCardIndex);
     }
@@ -670,6 +673,10 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
           onPointerUp: _handlePointerUp,
           onPointerCancel: _handlePointerCancel,
           onPointerSignal: _handlePointerSignal,
+          // 👈 Added Trackpad Gesture Support
+          onPointerPanZoomStart: _handlePointerPanZoomStart,
+          onPointerPanZoomUpdate: _handlePointerPanZoomUpdate,
+          onPointerPanZoomEnd: _handlePointerPanZoomEnd,
           child: GestureDetector(
             onPanUpdate: _handlePanUpdate,
             child: MouseRegion(
@@ -821,6 +828,31 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
       final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
       _zoomTowardPoint(zoomDelta, event.localPosition);
     }
+  }
+
+  // 👈 Implement Trackpad Handlers
+  void _handlePointerPanZoomStart(PointerPanZoomStartEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    _startZoomScale = _currentScale;
+  }
+
+  void _handlePointerPanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    
+    // Handle Zoom (Pinch)
+    if (event.scale != 1.0) {
+      final newScale = (_startZoomScale * event.scale).clamp(minScale, maxScale);
+      _updateScaleAtPoint(newScale, event.localPosition);
+    }
+    
+    // Handle Pan (2-finger move)
+    if (event.panDelta != Offset.zero) {
+      setState(() => _offset += event.panDelta);
+    }
+  }
+
+  void _handlePointerPanZoomEnd(PointerPanZoomEndEvent event) {
+    _startZoomScale = 1.0;
   }
 
   void _handlePanUpdate(DragUpdateDetails details) {
