@@ -4,6 +4,7 @@ import 'dart:io';
 import 'helpers/html_stub.dart' as html if (dart.library.html) 'dart:html';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
+import 'dart:math' as math;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'node/constants/node_types.dart';
@@ -852,8 +853,25 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   void _handlePointerSignal(PointerSignalEvent event) {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
     if (event is PointerScrollEvent) {
-      final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
-      _zoomTowardPoint(zoomDelta, event.localPosition);
+      // If a scale gesture is currently in progress, ignore pointer scroll signals
+      if (_isScaling) return;
+
+      // On touchpads (or high-precision scroll sources), some platforms send pinch as scroll
+      // events. Use a smooth multiplicative scale change for precision scrolling so trackpad
+      // pinches map to zoom. For regular mouse wheels, keep the discrete zoom step.
+      final isTouchPadLike = event.kind == PointerDeviceKind.trackpad || event.kind == PointerDeviceKind.touch;
+
+      if (isTouchPadLike) {
+        // Use an exponential mapping so small deltas produce small smooth zooms
+        final delta = -event.scrollDelta.dy; // positive when user scrolls up/pinch out
+        // tuning factor chosen empirically for comfortable zoom speed
+        final multiplier = math.pow(1.0016, delta);
+        final newScale = (_currentScale * multiplier).clamp(minScale, maxScale);
+        _updateScaleAtPoint(newScale, _globalToLocal(event.localPosition));
+      } else {
+        final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
+        _zoomTowardPoint(zoomDelta, event.localPosition);
+      }
     }
   }
 
