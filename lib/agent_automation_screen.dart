@@ -54,9 +54,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   double _currentScale = 1.0;
   Offset _offset = Offset.zero;
   
-  // Gesture State
-  double _startZoomScale = 1.0;
-  
   // UI state
   bool _isRightPanelVisible = true;
   bool _isMagicBuilderActive = false;
@@ -91,6 +88,13 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   final _rightPanelKey = GlobalKey<RightPanelState>();
   GlobalSettings _globalSettings = GlobalSettings();
   
+  // Scale gesture tracking
+  final Map<int, Offset> _touchPositions = {};
+  double _lastPinchDistance = 0.0;
+  // Track active two-finger scale (pinch) gestures from touchpad / touch devices
+  double _scaleStart = 1.0;
+  bool _isScaling = false;
+
   // Cards and connections
   List<DraggableCard> _cards = [
     DraggableCard(position: Offset(100, 100), title: 'Card 1', zIndex: 0),
@@ -124,18 +128,16 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     }
   }
 
-  // ==================== ZOOM & PAN HELPERS ====================
+  // ==================== ZOOM & PAN ====================
 
   void _updateScaleAtPoint(double newScale, Offset focalPoint) {
     final oldScale = _currentScale;
     if ((oldScale - newScale).abs() < 0.001) return;
 
-    // Calculate the point in the world (canvas) coordinates
     final worldX = (focalPoint.dx - _offset.dx) / oldScale;
     final worldY = (focalPoint.dy - _offset.dy) / oldScale;
 
     setState(() {
-      // Adjust offset to keep the focal point stable
       _offset = Offset(
         focalPoint.dx - worldX * newScale,
         focalPoint.dy - worldY * newScale,
@@ -666,13 +668,33 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
                 ? SystemMouseCursors.grab
                 : SystemMouseCursors.basic,
         child: Listener(
-          onPointerSignal: _handlePointerSignal, // Mouse wheel zoom
+          onPointerDown: _handlePointerDown,
+          onPointerMove: _handlePointerMove,
+          onPointerUp: _handlePointerUp,
+          onPointerCancel: _handlePointerCancel,
+          onPointerSignal: _handlePointerSignal,
           child: GestureDetector(
-            // Use Scale gesture for both Pan (1/2 fingers) and Zoom (2 fingers)
-            behavior: HitTestBehavior.translucent, // CRITICAL: Catch gestures on empty space
-            onScaleStart: _handleScaleStart,
-            onScaleUpdate: _handleScaleUpdate,
-            onScaleEnd: _handleScaleEnd,
+            onPanUpdate: _handlePanUpdate,
+            // Support pinch-to-zoom via scale gesture (trackpads and multi-touch)
+            onScaleStart: (details) {
+              if (_isMagicBuilderActive || _isCanvasLocked) return;
+              // mark scale start and remember base scale
+              _isScaling = true;
+              _scaleStart = _currentScale;
+            },
+            onScaleUpdate: (details) {
+              if (!_isScaling || _isMagicBuilderActive || _isCanvasLocked) return;
+              // details.scale is a multiplier relative to the start of the gesture (1.0 means unchanged)
+              final newScale = (_scaleStart * details.scale).clamp(minScale, maxScale);
+              // Use the focal point of the gesture so zoom focuses on the pinch center
+              final focalPoint = details.focalPoint;
+              _updateScaleAtPoint(newScale, _globalToLocal(focalPoint));
+            },
+            onScaleEnd: (details) {
+              _isScaling = false;
+              // ensure any accumulated history is saved
+              _saveToHistory();
+            },
             child: MouseRegion(
               onHover: (event) => _onConnectionHover(event.localPosition),
               child: Stack(
@@ -764,41 +786,84 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     );
   }
 
-  // ==================== GESTURE HANDLERS ====================
+  // ==================== POINTER EVENT HANDLERS ====================
 
-  void _handleScaleStart(ScaleStartDetails details) {
+  void _handlePointerDown(PointerDownEvent event) {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
-    _startZoomScale = _currentScale;
-  }
-
-  void _handleScaleUpdate(ScaleUpdateDetails details) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-
-    // 1. Handle Pan (1 or 2 fingers moving together)
-    if (details.focalPointDelta != Offset.zero) {
-      setState(() => _offset += details.focalPointDelta);
-    }
-
-    // 2. Handle Zoom (2 fingers pinching)
-    if (details.scale != 1.0) {
-      final newScale = (_startZoomScale * details.scale).clamp(minScale, maxScale);
-      // Zoom centered on the gesture's focal point
-      _updateScaleAtPoint(newScale, details.localFocalPoint);
+    _touchPositions[event.pointer] = event.position;
+    if (_touchPositions.length == 2) {
+      _lastPinchDistance = _calculatePinchDistance();
     }
   }
 
-  void _handleScaleEnd(ScaleEndDetails details) {
-    // Reset or clean up if needed
-    _startZoomScale = 1.0;
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    _touchPositions[event.pointer] = event.position;
+    
+    if (_touchPositions.length == 2) {
+      final currentDistance = _calculatePinchDistance();
+      if (_lastPinchDistance > 0) {
+        final scaleChange = currentDistance / _lastPinchDistance;
+        final newScale = (_currentScale * scaleChange).clamp(minScale, maxScale);
+        if (newScale != _currentScale) {
+          final focalPoint = _calculateFocalPoint();
+          _updateScaleAtPoint(newScale, focalPoint);
+        }
+      }
+      _lastPinchDistance = currentDistance;
+    }
   }
 
-  // Keep PointerSignal for Mouse Wheel Zoom
+  void _handlePointerUp(PointerUpEvent event) {
+    _touchPositions.remove(event.pointer);
+    if (_touchPositions.isEmpty) {
+      _lastPinchDistance = 0.0;
+    } else if (_touchPositions.length == 2) {
+      _lastPinchDistance = _calculatePinchDistance();
+    }
+    
+    // Handle connection creation
+    if (_nearestTargetPort != null && _dragFromPortSide != null && _dragFromCardIndex != null) {
+      _onPortDragEnd(_dragFromCardIndex!, _dragFromPortSide!);
+    }
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    _touchPositions.remove(event.pointer);
+    if (_touchPositions.isEmpty) {
+      _lastPinchDistance = 0.0;
+    }
+    if (_dragStartPosition != null) {
+      _resetDragState();
+    }
+  }
+
   void _handlePointerSignal(PointerSignalEvent event) {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
     if (event is PointerScrollEvent) {
       final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
       _zoomTowardPoint(zoomDelta, event.localPosition);
     }
+  }
+
+  void _handlePanUpdate(DragUpdateDetails details) {
+    if (_isMagicBuilderActive || _isCanvasLocked || _isScaling) return;
+    setState(() => _offset += details.delta);
+  }
+
+  double _calculatePinchDistance() {
+    if (_touchPositions.length < 2) return 0.0;
+    final positions = _touchPositions.values.toList();
+    return (positions[0] - positions[1]).distance;
+  }
+
+  Offset _calculateFocalPoint() {
+    if (_touchPositions.length < 2) return Offset.zero;
+    final positions = _touchPositions.values.toList();
+    return Offset(
+      (positions[0].dx + positions[1].dx) / 2,
+      (positions[0].dy + positions[1].dy) / 2,
+    );
   }
 
   void _onConnectionHover(Offset position) {
@@ -874,24 +939,31 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     return sortedIndices.map((index) {
       final card = _cards[index];
       
-      return Positioned(
-        key: ValueKey('card_$index'),
-        left: card.position.dx * _currentScale + _offset.dx,
-        top: card.position.dy * _currentScale + _offset.dy,
-        child: ValueListenableBuilder<Offset>(
+      if (_draggedCardIndex == index) {
+        return ValueListenableBuilder<Offset>(
+          key: ValueKey('card_$index'),
           valueListenable: _currentDragOffset,
-          builder: (_, dragOffset, child) {
-            final effectiveOffset = (_draggedCardIndex == index) ? dragOffset : Offset.zero;
-            return Transform.translate(
-              offset: effectiveOffset,
-              child: child!,
-            );
-          },
+          builder: (_, dragOffset, child) => Positioned(
+            left: card.position.dx * _currentScale + _offset.dx + dragOffset.dx,
+            top: card.position.dy * _currentScale + _offset.dy + dragOffset.dy,
+            child: child!,
+          ),
           child: Transform.scale(
             scale: _currentScale,
             alignment: Alignment.topLeft,
             child: _buildCardWidget(card, index),
           ),
+        );
+      }
+
+      return Positioned(
+        key: ValueKey('card_$index'),
+        left: card.position.dx * _currentScale + _offset.dx,
+        top: card.position.dy * _currentScale + _offset.dy,
+        child: Transform.scale(
+          scale: _currentScale,
+          alignment: Alignment.topLeft,
+          child: _buildCardWidget(card, index),
         ),
       );
     }).toList();
@@ -899,6 +971,10 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   Widget _buildCardWidget(DraggableCard card, int index) {
     return GestureDetector(
+      onTap: () => setState(() {
+        _selectedCard = _cards[index];
+        _hoveredCardIndex = index;
+      }),
       child: DraggableCardWidget(
         key: ValueKey('${card.id}_${card.textContent.hashCode}'),
         card: card,
@@ -911,6 +987,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
           _bringToFront(index);
           setState(() {});
         },
+        onCardSelected: () => setState(() => _selectedCard = _cards[index]),
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
             _currentDragOffset.value += details.delta * _currentScale;
