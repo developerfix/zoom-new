@@ -53,7 +53,12 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Canvas transform state
   double _currentScale = 1.0;
   Offset _offset = Offset.zero;
-  final TransformationController _transformationController = TransformationController();
+  
+  // Variables for Gesture Detection
+  double _baseScale = 1.0;
+  Offset _baseOffset = Offset.zero;
+  Offset? _lastFocalPoint;
+
   // UI state
   bool _isRightPanelVisible = true;
   bool _isMagicBuilderActive = false;
@@ -88,10 +93,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   final _rightPanelKey = GlobalKey<RightPanelState>();
   GlobalSettings _globalSettings = GlobalSettings();
   
-  // Scale gesture tracking
-  final Map<int, Offset> _touchPositions = {};
-  double _lastPinchDistance = 0.0;
-
   // Cards and connections
   List<DraggableCard> _cards = [
     DraggableCard(position: Offset(100, 100), title: 'Card 1', zIndex: 0),
@@ -107,32 +108,16 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   @override
   void initState() {
-    super.initState();  _transformationController.addListener(_onTransformationChanged);
+    super.initState();
   }
 
   @override
   void dispose() {
     _historyDebounceTimer?.cancel();
-    _currentDragOffset.dispose();  _transformationController.removeListener(_onTransformationChanged);
-  _transformationController.dispose();
+    _currentDragOffset.dispose();
     super.dispose();
   }
-void _onTransformationChanged() {
-  final m = _transformationController.value;
-  // scale nikalne ka safe tareeqa
-  final newScale = m.getMaxScaleOnAxis();
-  // translation components (matrix storage indices)
-  final dx = m.storage[12];
-  final dy = m.storage[13];
 
-  // Agar change aya to setState karo
-  if ((newScale - _currentScale).abs() > 0.0001 || _offset.dx != dx || _offset.dy != dy) {
-    setState(() {
-      _currentScale = newScale;
-      _offset = Offset(dx, dy);
-    });
-  }
-}
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -141,47 +126,104 @@ void _onTransformationChanged() {
     }
   }
 
-  // ==================== ZOOM & PAN ====================
+  // ==================== ZOOM & PAN HELPERS ====================
 
   void _updateScaleAtPoint(double newScale, Offset focalPoint) {
-    final oldScale = _currentScale;
-    if ((oldScale - newScale).abs() < 0.001) return;
+    // Clamp scale
+    newScale = newScale.clamp(minScale, maxScale);
+    if ((_currentScale - newScale).abs() < 0.001) return;
 
-    final worldX = (focalPoint.dx - _offset.dx) / oldScale;
-    final worldY = (focalPoint.dy - _offset.dy) / oldScale;
+    // Calculate the world coordinate of the focal point before zoom
+    final worldFocalPoint = (focalPoint - _offset) / _currentScale;
 
+    // Update scale
     setState(() {
-      _offset = Offset(
-        focalPoint.dx - worldX * newScale,
-        focalPoint.dy - worldY * newScale,
-      );
       _currentScale = newScale;
+      // Adjust offset to keep the world point under the focal point
+      _offset = focalPoint - (worldFocalPoint * newScale);
     });
   }
 
   void _zoomIn() {
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox != null) {
-      final center = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-      _updateScaleAtPoint((_currentScale + zoomStep).clamp(minScale, maxScale), center);
-    }
+    final size = MediaQuery.sizeOf(context);
+    final center = Offset(size.width / 2, size.height / 2);
+    _updateScaleAtPoint(_currentScale + zoomStep, center);
   }
 
   void _zoomOut() {
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox != null) {
-      final center = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-      _updateScaleAtPoint((_currentScale - zoomStep).clamp(minScale, maxScale), center);
-    }
+    final size = MediaQuery.sizeOf(context);
+    final center = Offset(size.width / 2, size.height / 2);
+    _updateScaleAtPoint(_currentScale - zoomStep, center);
   }
 
   void _zoomTowardPoint(double deltaScale, Offset focalPoint) {
-    _updateScaleAtPoint((_currentScale + deltaScale).clamp(minScale, maxScale), focalPoint);
+    _updateScaleAtPoint(_currentScale + deltaScale, focalPoint);
   }
 
   Offset _globalToLocal(Offset globalPosition) {
     final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
     return canvasBox?.globalToLocal(globalPosition) ?? globalPosition;
+  }
+
+  // ==================== GESTURE HANDLERS (FIXED) ====================
+
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+
+    if (event is PointerScaleEvent) {
+      // Trackpad Pinch Zoom
+      // PointerScaleEvent gives a 'scale' relative to 1.0 per event usually
+      double newScale = _currentScale * event.scale;
+      _updateScaleAtPoint(newScale, event.localPosition);
+    } else if (event is PointerScrollEvent) {
+      // Mouse Wheel Zoom (with Ctrl) or Trackpad Scroll
+      // Adjust sensitivity as needed
+      if (event.scrollDelta.dy != 0) {
+        double scaleChange = event.scrollDelta.dy < 0 ? 0.1 : -0.1;
+         // If Ctrl is pressed, or on some trackpads, treat scroll as zoom
+        _zoomTowardPoint(scaleChange, event.localPosition);
+      }
+    }
+  }
+
+  void _handleScaleStart(ScaleStartDetails details) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    _baseScale = _currentScale;
+    _baseOffset = _offset;
+    _lastFocalPoint = details.localFocalPoint;
+  }
+
+  void _handleScaleUpdate(ScaleUpdateDetails details) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+
+    setState(() {
+      // 1. Handle Zoom
+      if (details.scale != 1.0) {
+        final newScale = (_baseScale * details.scale).clamp(minScale, maxScale);
+        
+        // Math to zoom towards focal point:
+        // currentFocal = (focal - oldOffset) / oldScale
+        // newOffset = focal - currentFocal * newScale
+        // This is complex during a continuous gesture, simpler approach:
+        
+        // Use the difference in focal point for panning + scaling logic
+        // But for standard GestureDetector behavior:
+        
+        // Calculate the "World Point" under the starting focal point
+        final worldPoint = (_lastFocalPoint! - _baseOffset) / _baseScale;
+        
+        _currentScale = newScale;
+        // Adjust offset so that worldPoint is still under the current focalPoint
+        _offset = details.localFocalPoint - (worldPoint * _currentScale);
+      } else {
+        // 2. Handle Pan Only (if scale is 1.0)
+        final delta = details.localFocalPoint - _lastFocalPoint!;
+        _offset += delta;
+      }
+      
+      // Update focal point for next frame
+      _lastFocalPoint = details.localFocalPoint;
+    });
   }
 
   // ==================== CARD OPERATIONS ====================
@@ -250,7 +292,14 @@ void _onTransformationChanged() {
   }
 
   void _onPortDragStart(int cardIndex, PortSide side, Offset globalPosition, {int? setVarIndex}) {
+    // When using Manual Scale/Offset, globalToLocal usually returns the coordinate 
+    // relative to the Stack. Since our Stack is full screen, this is (Pointer - WindowTopLeft).
+    // But we need "Canvas Local" for drag line drawing which is handled by CustomPaint inside Stack.
+    
+    // The incoming globalPosition is Screen Coordinates.
+    // _globalToLocal converts it to coordinates relative to the Stack (which is the Canvas Viewport).
     final localPos = _globalToLocal(globalPosition);
+
     setState(() {
       _dragFromCardIndex = cardIndex;
       _dragFromPortSide = side;
@@ -324,6 +373,8 @@ void _onTransformationChanged() {
 
       final card = _cards[i];
       final cardHeight = baseCardHeight + (card.setVariables.length * setVarRowHeight);
+      
+      // NOTE: Using manual scale math consistent with Positioned widgets
       final cardX = card.position.dx * _currentScale + _offset.dx + (12.0 * _currentScale);
       final cardY = card.position.dy * _currentScale + _offset.dy;
       final cardRect = Rect.fromLTWH(cardX, cardY, 200.0 * _currentScale, cardHeight * _currentScale);
@@ -673,214 +724,119 @@ void _onTransformationChanged() {
   }
 
   Widget _buildCanvas() {
-    return Stack(
-      children: [    Positioned.fill(
-        child: InfiniteDotGrid(
-          scale: _currentScale,
-          offset: _offset,
-        ),
-      ),
-
-        Positioned.fill(
-          child: Listener(
-        onPointerSignal: (pointerSignal) {
-          if (pointerSignal is PointerScaleEvent) {
-            final scale = pointerSignal.scale;
-            final matrix = _transformationController.value.clone();
-            matrix.scale(scale);
-            _transformationController.value = matrix;
-            setState(() {});
-          }
-        },
-        child: InteractiveViewer(
-          transformationController: _transformationController,  minScale: minScale,
-          maxScale: maxScale,
-          boundaryMargin: const EdgeInsets.all(0),
-          child:ClipRect(
-          child: MouseRegion(
-            cursor: _draggedCardIndex != null
-                ? SystemMouseCursors.grabbing
-                : (!_isCanvasLocked && !_isMagicBuilderActive)
-                    ? SystemMouseCursors.grab
-                    : SystemMouseCursors.basic,
-            child: Listener(
-              onPointerDown: _handlePointerDown,
-              onPointerMove: _handlePointerMove,
-              onPointerUp: _handlePointerUp,
-              onPointerCancel: _handlePointerCancel,
-              onPointerSignal: _handlePointerSignal,
-              child: GestureDetector(
-                onPanUpdate: _handlePanUpdate,
-                child: MouseRegion(
-                  onHover: (event) => _onConnectionHover(event.localPosition),
-                  child: Stack(
-                    key: _canvasKey,
-                    clipBehavior: Clip.hardEdge,
-                    children: [
-                      // Background grid - must be Positioned.fill to take full size
+    // REPLACED InteractiveViewer with Listener + GestureDetector 
+    // to handle manual scale/offset calculations correctly.
+    return Listener(
+      onPointerSignal: _onPointerSignal,
+      child: GestureDetector(
+        onScaleStart: _handleScaleStart,
+        onScaleUpdate: _handleScaleUpdate,
+        // Container ensures hit tests work on empty space
+        child: Container(
+          color: Colors.transparent, 
+          child: ClipRect(
+            child: MouseRegion(
+              cursor: _draggedCardIndex != null
+                  ? SystemMouseCursors.grabbing
+                  : (!_isCanvasLocked && !_isMagicBuilderActive)
+                      ? SystemMouseCursors.grab
+                      : SystemMouseCursors.basic,
+              child: MouseRegion(
+                onHover: (event) => _onConnectionHover(event.localPosition),
+                child: Stack(
+                  key: _canvasKey,
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    // Background grid
+                    Positioned.fill(
+                      child: InfiniteDotGrid(
+                        scale: _currentScale,
+                        offset: _offset,
+                      ),
+                    ),
                     
-                      
-                      // Connection lines layer
-                      Positioned.fill(
-                        child: RepaintBoundary(
-                          child: IgnorePointer(
-                            child: ValueListenableBuilder<Offset>(
-                              valueListenable: _currentDragOffset,
-                              builder: (_, dragOffset, __) => CustomPaint(
-                                painter: ConnectionPainter(
-                                  connections: _connections,
-                                  cards: _cards,
-                                  scale: _currentScale,
-                                  offset: _offset,
-                                  hoveredConnectionId: _hoveredConnectionId,
-                                  draggedCardIndex: _draggedCardIndex,
-                                  dragOffset: dragOffset,
-                                ),
-                                isComplex: true,
-                                willChange: _draggedCardIndex != null,
+                    // Connection lines layer
+                    Positioned.fill(
+                      child: RepaintBoundary(
+                        child: IgnorePointer(
+                          child: ValueListenableBuilder<Offset>(
+                            valueListenable: _currentDragOffset,
+                            builder: (_, dragOffset, __) => CustomPaint(
+                              painter: ConnectionPainter(
+                                connections: _connections,
+                                cards: _cards,
+                                scale: _currentScale,
+                                offset: _offset,
+                                hoveredConnectionId: _hoveredConnectionId,
+                                draggedCardIndex: _draggedCardIndex,
+                                dragOffset: dragOffset,
                               ),
+                              isComplex: true,
+                              willChange: _draggedCardIndex != null,
                             ),
                           ),
                         ),
                       ),
-                      
-                      // Cards layer
-                      ..._buildSortedCards(),
-                      
-                      // Drag line layer
-                      if (_dragStartPosition != null)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: CustomPaint(
-                              painter: DragLinePainter(
-                                dragStartPosition: _dragStartPosition,
-                                dragCurrentPosition: _dragCurrentPosition,
-                                nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
-                                scale: _currentScale,
-                              ),
+                    ),
+                    
+                    // Cards layer
+                    ..._buildSortedCards(),
+                    
+                    // Drag line layer
+                    if (_dragStartPosition != null)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: DragLinePainter(
+                              dragStartPosition: _dragStartPosition,
+                              dragCurrentPosition: _dragCurrentPosition,
+                              nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
+                              scale: _currentScale,
                             ),
                           ),
                         ),
-                      
-                      // Delete button for hovered connection
-                      if (_hoveredConnectionId != null) _buildDeleteButton(),
-                      
-                      // Magic Builder overlay
-                      if (_isMagicBuilderActive)
-                        FrostedGlassOverlay(
-                          isVisible: true,
-                          onClose: () => setState(() => _isMagicBuilderActive = false),
-                        ),
-                      
-                      // Mobile Magic Builder button
-                      if (MediaQuery.sizeOf(context).width < 700)
-                        Positioned(
-                          top: 16,
-                          left: 16,
-                          child: _buildMobileMenuButton(),
-                        ),
-                      
-                      // Right panel toggle
+                      ),
+                    
+                    // Delete button for hovered connection
+                    if (_hoveredConnectionId != null) _buildDeleteButton(),
+                    
+                    // Magic Builder overlay
+                    if (_isMagicBuilderActive)
+                      FrostedGlassOverlay(
+                        isVisible: true,
+                        onClose: () => setState(() => _isMagicBuilderActive = false),
+                      ),
+                    
+                    // Mobile Magic Builder button
+                    if (MediaQuery.sizeOf(context).width < 700)
                       Positioned(
                         top: 16,
-                        right: 16,
-                        child: FloatingActionButton(
-                          heroTag: 'right-panel-toggle',
-                          mini: true,
-                          onPressed: _toggleRightPanel,
-                          child: Icon(_isRightPanelVisible ? Icons.close : Icons.menu),
-                        ),
+                        left: 16,
+                        child: _buildMobileMenuButton(),
                       ),
-                    ],
-                  ),
+                    
+                    // Right panel toggle
+                    Positioned(
+                      top: 16,
+                      right: 16,
+                      child: FloatingActionButton(
+                        heroTag: 'right-panel-toggle',
+                        mini: true,
+                        onPressed: _toggleRightPanel,
+                        child: Icon(_isRightPanelVisible ? Icons.close : Icons.menu),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-        )))),
-      ],
+        ),
+      ),
     );
   }
 
-  // ==================== POINTER EVENT HANDLERS ====================
-
-  void _handlePointerDown(PointerDownEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    _touchPositions[event.pointer] = event.position;
-    if (_touchPositions.length == 2) {
-      _lastPinchDistance = _calculatePinchDistance();
-    }
-  }
-
-  void _handlePointerMove(PointerMoveEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    _touchPositions[event.pointer] = event.position;
-    
-    if (_touchPositions.length == 2) {
-      final currentDistance = _calculatePinchDistance();
-      if (_lastPinchDistance > 0) {
-        final scaleChange = currentDistance / _lastPinchDistance;
-        final newScale = (_currentScale * scaleChange).clamp(minScale, maxScale);
-        if (newScale != _currentScale) {
-          final focalPoint = _calculateFocalPoint();
-          _updateScaleAtPoint(newScale, focalPoint);
-        }
-      }
-      _lastPinchDistance = currentDistance;
-    }
-  }
-
-  void _handlePointerUp(PointerUpEvent event) {
-    _touchPositions.remove(event.pointer);
-    if (_touchPositions.isEmpty) {
-      _lastPinchDistance = 0.0;
-    } else if (_touchPositions.length == 2) {
-      _lastPinchDistance = _calculatePinchDistance();
-    }
-    
-    // Handle connection creation
-    if (_nearestTargetPort != null && _dragFromPortSide != null && _dragFromCardIndex != null) {
-      _onPortDragEnd(_dragFromCardIndex!, _dragFromPortSide!);
-    }
-  }
-
-  void _handlePointerCancel(PointerCancelEvent event) {
-    _touchPositions.remove(event.pointer);
-    if (_touchPositions.isEmpty) {
-      _lastPinchDistance = 0.0;
-    }
-    if (_dragStartPosition != null) {
-      _resetDragState();
-    }
-  }
-
-  void _handlePointerSignal(PointerSignalEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    if (event is PointerScrollEvent) {
-      final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
-      _zoomTowardPoint(zoomDelta, event.localPosition);
-    }
-  }
-
-  void _handlePanUpdate(DragUpdateDetails details) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    setState(() => _offset += details.delta);
-  }
-
-  double _calculatePinchDistance() {
-    if (_touchPositions.length < 2) return 0.0;
-    final positions = _touchPositions.values.toList();
-    return (positions[0] - positions[1]).distance;
-  }
-
-  Offset _calculateFocalPoint() {
-    if (_touchPositions.length < 2) return Offset.zero;
-    final positions = _touchPositions.values.toList();
-    return Offset(
-      (positions[0].dx + positions[1].dx) / 2,
-      (positions[0].dy + positions[1].dy) / 2,
-    );
-  }
+  // ==================== HELPERS ====================
 
   void _onConnectionHover(Offset position) {
     if (_dragFromCardIndex != null || _connections.isEmpty) return;
@@ -946,8 +902,6 @@ void _onTransformationChanged() {
     return (point - closest).distance;
   }
 
-  // ==================== UI BUILDERS ====================
-
   List<Widget> _buildSortedCards() {
     final sortedIndices = List.generate(_cards.length, (i) => i)
       ..sort((a, b) => _cards[a].zIndex.compareTo(_cards[b].zIndex));
@@ -955,8 +909,6 @@ void _onTransformationChanged() {
     return sortedIndices.map((index) {
       final card = _cards[index];
       
-      // FIXED: Ensure Widget structure is consistent between drag and idle states
-      // to prevent GestureDetector from being disposed (rebuilt with new parent).
       return Positioned(
         key: ValueKey('card_$index'),
         left: card.position.dx * _currentScale + _offset.dx,
@@ -964,7 +916,6 @@ void _onTransformationChanged() {
         child: ValueListenableBuilder<Offset>(
           valueListenable: _currentDragOffset,
           builder: (_, dragOffset, child) {
-            // Only apply drag offset if this is the dragged card
             final effectiveOffset = (_draggedCardIndex == index) ? dragOffset : Offset.zero;
             return Transform.translate(
               offset: effectiveOffset,
@@ -983,10 +934,6 @@ void _onTransformationChanged() {
 
   Widget _buildCardWidget(DraggableCard card, int index) {
     return GestureDetector(
-      // onTap: () => setState(() {
-      //   _selectedCard = _cards[index];
-      //   _hoveredCardIndex = index;
-      // }),
       child: DraggableCardWidget(
         key: ValueKey('${card.id}_${card.textContent.hashCode}'),
         card: card,
@@ -999,10 +946,9 @@ void _onTransformationChanged() {
           _bringToFront(index);
           setState(() {});
         },
-        // onCardSelected: () => setState(() => _selectedCard = _cards[index]),
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
-            _currentDragOffset.value += details.delta * _currentScale;
+            _currentDragOffset.value += details.delta;
           }
         },
         onPanEnd: (details) {
