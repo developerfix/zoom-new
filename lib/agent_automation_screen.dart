@@ -4,7 +4,6 @@ import 'dart:io';
 import 'helpers/html_stub.dart' as html if (dart.library.html) 'dart:html';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
-import 'dart:math' as math;
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'node/constants/node_types.dart';
@@ -92,9 +91,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Scale gesture tracking
   final Map<int, Offset> _touchPositions = {};
   double _lastPinchDistance = 0.0;
-  // Track active two-finger scale (pinch) gestures from touchpad / touch devices
-  double _scaleStart = 1.0;
-  bool _isScaling = false;
 
   // Cards and connections
   List<DraggableCard> _cards = [
@@ -128,9 +124,57 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
       _isRightPanelVisible = false;
     }
   }
-
+// Yeh variables class ke start mein jahan baaki variables hain wahan add karein
+double _baseScale = 1.0;
+Offset _baseOffset = Offset.zero;
   // ==================== ZOOM & PAN ====================
 
+void _handleScaleStart(ScaleStartDetails details) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    _baseScale = _currentScale;
+    _baseOffset = _offset;
+  }
+
+  void _handleScaleUpdate(ScaleUpdateDetails details) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+
+    // Local focal point nikalne ke liye
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox == null) return;
+    
+    // Focal point (jahan fingers hain)
+    final focalPoint = canvasBox.globalToLocal(details.focalPoint);
+
+    setState(() {
+      // 1. Scale Update (Pinch)
+      if (details.scale != 1.0) {
+        // Naya scale calculate karein
+        double newScale = (_baseScale * details.scale).clamp(minScale, maxScale);
+        
+        // Math to keep zoom centered on fingers (Focal Point)
+        // Formula: NewOffset = FocalPoint - (FocalPoint - OldOffset) * (NewScale / OldScale)
+        // Lekin simple approach:
+        
+        final double scaleRatio = newScale / _currentScale;
+        _offset = focalPoint - (focalPoint - _offset) * scaleRatio;
+        _currentScale = newScale;
+      }
+      
+      // 2. Pan Update (Move) via Scale gesture (agar fingers move kar rahi hain)
+      // Note: Agar aap sirf pinch chahte hain toh pan logic PointerSignal (scroll) mein already hai.
+      // Lekin ScaleUpdate mein bhi pan data aata hai.
+      else if (details.scale == 1.0) {
+         // Agar user sirf drag kar raha hai bina pinch kiye
+         _offset += details.focalPointDelta;
+      }
+    });
+  }
+  
+  void _handleScaleEnd(ScaleEndDetails details) {
+     // Yahan kuch karne ki khaas zaroorat nahi, unless aap inertia chahte hain
+  }
+
+  
   void _updateScaleAtPoint(double newScale, Offset focalPoint) {
     final oldScale = _currentScale;
     if ((oldScale - newScale).abs() < 0.001) return;
@@ -675,38 +719,12 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
           onPointerCancel: _handlePointerCancel,
           onPointerSignal: _handlePointerSignal,
           child: GestureDetector(
-            // Use the scale gesture to handle both pinch-to-zoom and single-finger panning.
-            // Having both pan and scale recognizers causes an assertion; scale is a superset.
-            onScaleStart: (details) {
-              if (_isMagicBuilderActive || _isCanvasLocked) return;
-              // Reset scaling flag and remember base scale
-              _isScaling = false;
-              _scaleStart = _currentScale;
-            },
-            onScaleUpdate: (details) {
-              if (_isMagicBuilderActive || _isCanvasLocked) return;
-
-              // Determine whether this gesture is a scale (pinch) or a pan.
-              final isNowScaling = (details.scale - 1.0).abs() > 0.02;
-
-              if (isNowScaling) {
-                _isScaling = true;
-                final newScale = (_scaleStart * details.scale).clamp(minScale, maxScale);
-                // Use focal point so zoom centers at the pinch location
-                _updateScaleAtPoint(newScale, _globalToLocal(details.focalPoint));
-              } else {
-                // Treat as pan — focalPointDelta represents the movement
-                if (!_isScaling && details.focalPointDelta != Offset.zero) {
-                  setState(() => _offset += details.focalPointDelta);
-                }
-              }
-            },
-            onScaleEnd: (details) {
-              // reset flag and persist state
-              _isScaling = false;
-              _saveToHistory();
-            },
-            // (Scale handlers implemented above) - single onScale* implementation handles both pan and pinch
+    // onPanUpdate: _handlePanUpdate, // <-- Yeh line hata dein
+  
+  // Yeh 3 lines add karein:
+  onScaleStart: _handleScaleStart,
+  onScaleUpdate: _handleScaleUpdate,
+  onScaleEnd: _handleScaleEnd,
             child: MouseRegion(
               onHover: (event) => _onConnectionHover(event.localPosition),
               child: Stack(
@@ -850,74 +868,21 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     }
   }
 
-  void _handlePointerSignal(PointerSignalEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    // PointerPanZoomEvent support: some platforms (desktop touchpads) deliver
-    // pinch gestures as pan/zoom signals instead of GestureDetector scale events.
-    if (event is PointerPanZoomStartEvent) {
-      if (_isScaling) return;
-
-      // Use dynamic access because field names may differ across Flutter versions
-      // and some platforms deliver scale as a multiplicative value, or as a delta.
-      final dyn = event as dynamic;
-      Offset focal = Offset.zero;
-      try {
-        focal = dyn.localPosition ?? dyn.position ?? Offset.zero;
-      } catch (_) {}
-
-      try {
-        // First try absolute scale (multiplicative)
-        if (dyn.scale != null) {
-          final newScale = (_currentScale * (dyn.scale as double)).clamp(minScale, maxScale);
-          _updateScaleAtPoint(newScale, _globalToLocal(focal));
-          return;
-        }
-
-        // Then try relative scale delta
-        if (dyn.scaleDelta != null) {
-          final sd = dyn.scaleDelta as double;
-          final newScale = (_currentScale * (1.0 + sd)).clamp(minScale, maxScale);
-          _updateScaleAtPoint(newScale, _globalToLocal(focal));
-          return;
-        }
-
-        // Some implementations expose zoom or zoomDelta
-        if (dyn.zoom != null) {
-          final zd = dyn.zoom as double;
-          final newScale = (_currentScale * (1.0 + zd)).clamp(minScale, maxScale);
-          _updateScaleAtPoint(newScale, _globalToLocal(focal));
-          return;
-        }
-      } catch (_) {
-        // Ignore and fall through to other handlers
-      }
-    }
-
-    if (event is PointerScrollEvent) {
-      // If a scale gesture is currently in progress, ignore pointer scroll signals
-      if (_isScaling) return;
-
-      // On touchpads (or high-precision scroll sources), some platforms send pinch as scroll
-      // events. Use a smooth multiplicative scale change for precision scrolling so trackpad
-      // pinches map to zoom. For regular mouse wheels, keep the discrete zoom step.
-      final isTouchPadLike = event.kind == PointerDeviceKind.trackpad || event.kind == PointerDeviceKind.touch;
-
-      if (isTouchPadLike) {
-        // Use an exponential mapping so small deltas produce small smooth zooms
-        final delta = -event.scrollDelta.dy; // positive when user scrolls up/pinch out
-        // tuning factor chosen empirically for comfortable zoom speed
-        final multiplier = math.pow(1.0016, delta);
-        final newScale = (_currentScale * multiplier).clamp(minScale, maxScale);
-        _updateScaleAtPoint(newScale, _globalToLocal(event.localPosition));
-      } else {
-        final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
-        _zoomTowardPoint(zoomDelta, event.localPosition);
-      }
-    }
+ // Is function ko replace karein
+void _handlePointerSignal(PointerSignalEvent event) {
+  if (_isMagicBuilderActive || _isCanvasLocked) return;
+  
+  if (event is PointerScrollEvent) {
+    // Zoom logic ko hata kar Pan logic lagayi hai
+    setState(() {
+      // Scroll delta ko minus kiya hai taake direction natural feel ho
+      _offset -= event.scrollDelta; 
+    });
   }
+}
 
   void _handlePanUpdate(DragUpdateDetails details) {
-    if (_isMagicBuilderActive || _isCanvasLocked || _isScaling) return;
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
     setState(() => _offset += details.delta);
   }
 
