@@ -718,6 +718,8 @@ void _handleScaleStart(ScaleStartDetails details) {
           onPointerUp: _handlePointerUp,
           onPointerCancel: _handlePointerCancel,
           onPointerSignal: _handlePointerSignal,
+          onPointerPanZoomStart: _handlePanZoomStart,
+        onPointerPanZoomUpdate: _handlePanZoomUpdate,
           child: GestureDetector(
     // onPanUpdate: _handlePanUpdate, // <-- Yeh line hata dein
   
@@ -817,7 +819,37 @@ void _handleScaleStart(ScaleStartDetails details) {
   }
 
   // ==================== POINTER EVENT HANDLERS ====================
+// ==================== TRACKPAD PINCH HANDLERS ====================
 
+  void _handlePanZoomStart(PointerPanZoomStartEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    // Current scale ko base bana lein jab gesture shuru ho
+    _baseScale = _currentScale;
+  }
+
+  void _handlePanZoomUpdate(PointerPanZoomUpdateEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+
+    // Trackpad pinch se 'scale' value milti hai
+    // event.scale usually 1.0 se start hoti hai aur expand karne par barhti hai
+    
+    if (event.scale != 1.0) {
+      final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+      if (canvasBox == null) return;
+
+      // Jis jagah fingers hain wahan focus karein
+      final focalPoint = canvasBox.globalToLocal(event.position);
+
+      setState(() {
+        double newScale = (_baseScale * event.scale).clamp(minScale, maxScale);
+        
+        // Zoom calculation (Same logic as before)
+        final double scaleRatio = newScale / _currentScale;
+        _offset = focalPoint - (focalPoint - _offset) * scaleRatio;
+        _currentScale = newScale;
+      });
+    }
+  }
   void _handlePointerDown(PointerDownEvent event) {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
     _touchPositions[event.pointer] = event.position;
