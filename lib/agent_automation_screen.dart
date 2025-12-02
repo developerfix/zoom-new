@@ -53,7 +53,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Canvas transform state
   double _currentScale = 1.0;
   Offset _offset = Offset.zero;
-  
+  final TransformationController _transformationController = TransformationController();
   // UI state
   bool _isRightPanelVisible = true;
   bool _isMagicBuilderActive = false;
@@ -107,16 +107,32 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   @override
   void initState() {
-    super.initState();
+    super.initState();  _transformationController.addListener(_onTransformationChanged);
   }
 
   @override
   void dispose() {
     _historyDebounceTimer?.cancel();
-    _currentDragOffset.dispose();
+    _currentDragOffset.dispose();  _transformationController.removeListener(_onTransformationChanged);
+  _transformationController.dispose();
     super.dispose();
   }
+void _onTransformationChanged() {
+  final m = _transformationController.value;
+  // scale nikalne ka safe tareeqa
+  final newScale = m.getMaxScaleOnAxis();
+  // translation components (matrix storage indices)
+  final dx = m.storage[12];
+  final dy = m.storage[13];
 
+  // Agar change aya to setState karo
+  if ((newScale - _currentScale).abs() > 0.0001 || _offset.dx != dx || _offset.dy != dy) {
+    setState(() {
+      _currentScale = newScale;
+      _offset = Offset(dx, dy);
+    });
+  }
+}
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -657,109 +673,128 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   Widget _buildCanvas() {
-    return ClipRect(
-      child: MouseRegion(
-        cursor: _draggedCardIndex != null
-            ? SystemMouseCursors.grabbing
-            : (!_isCanvasLocked && !_isMagicBuilderActive)
-                ? SystemMouseCursors.grab
-                : SystemMouseCursors.basic,
-        child: Listener(
-          onPointerDown: _handlePointerDown,
-          onPointerMove: _handlePointerMove,
-          onPointerUp: _handlePointerUp,
-          onPointerCancel: _handlePointerCancel,
-          onPointerSignal: _handlePointerSignal,
-          child: GestureDetector(
-            onPanUpdate: _handlePanUpdate,
-            child: MouseRegion(
-              onHover: (event) => _onConnectionHover(event.localPosition),
-              child: Stack(
-                key: _canvasKey,
-                clipBehavior: Clip.hardEdge,
-                children: [
-                  // Background grid - must be Positioned.fill to take full size
-                  Positioned.fill(
-                    child: InfiniteDotGrid(scale: _currentScale, offset: _offset),
-                  ),
-                  
-                  // Connection lines layer
-                  Positioned.fill(
-                    child: RepaintBoundary(
-                      child: IgnorePointer(
-                        child: ValueListenableBuilder<Offset>(
-                          valueListenable: _currentDragOffset,
-                          builder: (_, dragOffset, __) => CustomPaint(
-                            painter: ConnectionPainter(
-                              connections: _connections,
-                              cards: _cards,
-                              scale: _currentScale,
-                              offset: _offset,
-                              hoveredConnectionId: _hoveredConnectionId,
-                              draggedCardIndex: _draggedCardIndex,
-                              dragOffset: dragOffset,
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Listener(
+        onPointerSignal: (pointerSignal) {
+          if (pointerSignal is PointerScaleEvent) {
+            final scale = pointerSignal.scale;
+            final matrix = _transformationController.value.clone();
+            matrix.scale(scale);
+            _transformationController.value = matrix;
+            setState(() {});
+          }
+        },
+        child: InteractiveViewer(
+          transformationController: _transformationController,  minScale: minScale,
+          maxScale: maxScale,
+          boundaryMargin: const EdgeInsets.all(double.infinity),
+          child:ClipRect(
+          child: MouseRegion(
+            cursor: _draggedCardIndex != null
+                ? SystemMouseCursors.grabbing
+                : (!_isCanvasLocked && !_isMagicBuilderActive)
+                    ? SystemMouseCursors.grab
+                    : SystemMouseCursors.basic,
+            child: Listener(
+              onPointerDown: _handlePointerDown,
+              onPointerMove: _handlePointerMove,
+              onPointerUp: _handlePointerUp,
+              onPointerCancel: _handlePointerCancel,
+              onPointerSignal: _handlePointerSignal,
+              child: GestureDetector(
+                onPanUpdate: _handlePanUpdate,
+                child: MouseRegion(
+                  onHover: (event) => _onConnectionHover(event.localPosition),
+                  child: Stack(
+                    key: _canvasKey,
+                    clipBehavior: Clip.hardEdge,
+                    children: [
+                      // Background grid - must be Positioned.fill to take full size
+                      Positioned.fill(
+                        child: InfiniteDotGrid(scale: _currentScale, offset: _offset),
+                      ),
+                      
+                      // Connection lines layer
+                      Positioned.fill(
+                        child: RepaintBoundary(
+                          child: IgnorePointer(
+                            child: ValueListenableBuilder<Offset>(
+                              valueListenable: _currentDragOffset,
+                              builder: (_, dragOffset, __) => CustomPaint(
+                                painter: ConnectionPainter(
+                                  connections: _connections,
+                                  cards: _cards,
+                                  scale: _currentScale,
+                                  offset: _offset,
+                                  hoveredConnectionId: _hoveredConnectionId,
+                                  draggedCardIndex: _draggedCardIndex,
+                                  dragOffset: dragOffset,
+                                ),
+                                isComplex: true,
+                                willChange: _draggedCardIndex != null,
+                              ),
                             ),
-                            isComplex: true,
-                            willChange: _draggedCardIndex != null,
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                  
-                  // Cards layer
-                  ..._buildSortedCards(),
-                  
-                  // Drag line layer
-                  if (_dragStartPosition != null)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: CustomPaint(
-                          painter: DragLinePainter(
-                            dragStartPosition: _dragStartPosition,
-                            dragCurrentPosition: _dragCurrentPosition,
-                            nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
-                            scale: _currentScale,
+                      
+                      // Cards layer
+                      ..._buildSortedCards(),
+                      
+                      // Drag line layer
+                      if (_dragStartPosition != null)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: CustomPaint(
+                              painter: DragLinePainter(
+                                dragStartPosition: _dragStartPosition,
+                                dragCurrentPosition: _dragCurrentPosition,
+                                nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
+                                scale: _currentScale,
+                              ),
+                            ),
                           ),
                         ),
+                      
+                      // Delete button for hovered connection
+                      if (_hoveredConnectionId != null) _buildDeleteButton(),
+                      
+                      // Magic Builder overlay
+                      if (_isMagicBuilderActive)
+                        FrostedGlassOverlay(
+                          isVisible: true,
+                          onClose: () => setState(() => _isMagicBuilderActive = false),
+                        ),
+                      
+                      // Mobile Magic Builder button
+                      if (MediaQuery.sizeOf(context).width < 700)
+                        Positioned(
+                          top: 16,
+                          left: 16,
+                          child: _buildMobileMenuButton(),
+                        ),
+                      
+                      // Right panel toggle
+                      Positioned(
+                        top: 16,
+                        right: 16,
+                        child: FloatingActionButton(
+                          heroTag: 'right-panel-toggle',
+                          mini: true,
+                          onPressed: _toggleRightPanel,
+                          child: Icon(_isRightPanelVisible ? Icons.close : Icons.menu),
+                        ),
                       ),
-                    ),
-                  
-                  // Delete button for hovered connection
-                  if (_hoveredConnectionId != null) _buildDeleteButton(),
-                  
-                  // Magic Builder overlay
-                  if (_isMagicBuilderActive)
-                    FrostedGlassOverlay(
-                      isVisible: true,
-                      onClose: () => setState(() => _isMagicBuilderActive = false),
-                    ),
-                  
-                  // Mobile Magic Builder button
-                  if (MediaQuery.sizeOf(context).width < 700)
-                    Positioned(
-                      top: 16,
-                      left: 16,
-                      child: _buildMobileMenuButton(),
-                    ),
-                  
-                  // Right panel toggle
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: FloatingActionButton(
-                      heroTag: 'right-panel-toggle',
-                      mini: true,
-                      onPressed: _toggleRightPanel,
-                      child: Icon(_isRightPanelVisible ? Icons.close : Icons.menu),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
-        ),
-      ),
+        )))),
+      ],
     );
   }
 
