@@ -165,22 +165,19 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     return canvasBox?.globalToLocal(globalPosition) ?? globalPosition;
   }
 
-  // ==================== GESTURE HANDLERS (FIXED) ====================
+  // ==================== GESTURE HANDLERS (ZOOM/PAN) ====================
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
 
     if (event is PointerScaleEvent) {
       // Trackpad Pinch Zoom
-      // PointerScaleEvent gives a 'scale' relative to 1.0 per event usually
       double newScale = _currentScale * event.scale;
       _updateScaleAtPoint(newScale, event.localPosition);
     } else if (event is PointerScrollEvent) {
-      // Mouse Wheel Zoom (with Ctrl) or Trackpad Scroll
-      // Adjust sensitivity as needed
+      // Mouse Wheel Zoom
       if (event.scrollDelta.dy != 0) {
         double scaleChange = event.scrollDelta.dy < 0 ? 0.1 : -0.1;
-         // If Ctrl is pressed, or on some trackpads, treat scroll as zoom
         _zoomTowardPoint(scaleChange, event.localPosition);
       }
     }
@@ -197,31 +194,15 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     if (_isMagicBuilderActive || _isCanvasLocked) return;
 
     setState(() {
-      // 1. Handle Zoom
       if (details.scale != 1.0) {
         final newScale = (_baseScale * details.scale).clamp(minScale, maxScale);
-        
-        // Math to zoom towards focal point:
-        // currentFocal = (focal - oldOffset) / oldScale
-        // newOffset = focal - currentFocal * newScale
-        // This is complex during a continuous gesture, simpler approach:
-        
-        // Use the difference in focal point for panning + scaling logic
-        // But for standard GestureDetector behavior:
-        
-        // Calculate the "World Point" under the starting focal point
         final worldPoint = (_lastFocalPoint! - _baseOffset) / _baseScale;
-        
         _currentScale = newScale;
-        // Adjust offset so that worldPoint is still under the current focalPoint
         _offset = details.localFocalPoint - (worldPoint * _currentScale);
       } else {
-        // 2. Handle Pan Only (if scale is 1.0)
         final delta = details.localFocalPoint - _lastFocalPoint!;
         _offset += delta;
       }
-      
-      // Update focal point for next frame
       _lastFocalPoint = details.localFocalPoint;
     });
   }
@@ -292,12 +273,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   void _onPortDragStart(int cardIndex, PortSide side, Offset globalPosition, {int? setVarIndex}) {
-    // When using Manual Scale/Offset, globalToLocal usually returns the coordinate 
-    // relative to the Stack. Since our Stack is full screen, this is (Pointer - WindowTopLeft).
-    // But we need "Canvas Local" for drag line drawing which is handled by CustomPaint inside Stack.
-    
-    // The incoming globalPosition is Screen Coordinates.
-    // _globalToLocal converts it to coordinates relative to the Stack (which is the Canvas Viewport).
     final localPos = _globalToLocal(globalPosition);
 
     setState(() {
@@ -374,7 +349,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
       final card = _cards[i];
       final cardHeight = baseCardHeight + (card.setVariables.length * setVarRowHeight);
       
-      // NOTE: Using manual scale math consistent with Positioned widgets
       final cardX = card.position.dx * _currentScale + _offset.dx + (12.0 * _currentScale);
       final cardY = card.position.dy * _currentScale + _offset.dy;
       final cardRect = Rect.fromLTWH(cardX, cardY, 200.0 * _currentScale, cardHeight * _currentScale);
@@ -724,14 +698,11 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   Widget _buildCanvas() {
-    // REPLACED InteractiveViewer with Listener + GestureDetector 
-    // to handle manual scale/offset calculations correctly.
     return Listener(
       onPointerSignal: _onPointerSignal,
       child: GestureDetector(
         onScaleStart: _handleScaleStart,
         onScaleUpdate: _handleScaleUpdate,
-        // Container ensures hit tests work on empty space
         child: Container(
           color: Colors.transparent, 
           child: ClipRect(
@@ -948,7 +919,8 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
         },
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
-            _currentDragOffset.value += details.delta;
+            // FIX: Multiply by scale because GestureDetector is inside the scale transform
+            _currentDragOffset.value += details.delta * _currentScale;
           }
         },
         onPanEnd: (details) {
@@ -1133,4 +1105,3 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     );  
   }
 }
-//
