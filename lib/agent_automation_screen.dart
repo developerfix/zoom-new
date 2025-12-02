@@ -50,7 +50,8 @@ class AgentAutomationScreen extends StatefulWidget {
 }
 
 class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
-  // Canvas transform state
+  // Canvas transform state - Controlled by InteractiveViewer
+  final TransformationController _transformationController = TransformationController();
   double _currentScale = 1.0;
   Offset _offset = Offset.zero;
   
@@ -88,10 +89,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   final _rightPanelKey = GlobalKey<RightPanelState>();
   GlobalSettings _globalSettings = GlobalSettings();
   
-  // Scale gesture tracking
-  final Map<int, Offset> _touchPositions = {};
-  double _lastPinchDistance = 0.0;
-
   // Cards and connections
   List<DraggableCard> _cards = [
     DraggableCard(position: Offset(100, 100), title: 'Card 1', zIndex: 0),
@@ -103,15 +100,24 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Constants
   static const double minScale = 0.1;
   static const double maxScale = 5.0;
-  static const double zoomStep = 0.2;
 
   @override
   void initState() {
     super.initState();
+    // Sync TransformationController updates to local state variables
+    _transformationController.addListener(() {
+      setState(() {
+        _currentScale = _transformationController.value.getMaxScaleOnAxis();
+        // Extract translation from matrix
+        final translation = _transformationController.value.getTranslation();
+        _offset = Offset(translation.x, translation.y);
+      });
+    });
   }
 
   @override
   void dispose() {
+    _transformationController.dispose();
     _historyDebounceTimer?.cancel();
     _currentDragOffset.dispose();
     super.dispose();
@@ -124,94 +130,36 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
       _isRightPanelVisible = false;
     }
   }
-// Yeh variables class ke start mein jahan baaki variables hain wahan add karein
-double _baseScale = 1.0;
-Offset _baseOffset = Offset.zero;
-  // ==================== ZOOM & PAN ====================
 
-void _handleScaleStart(ScaleStartDetails details) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    _baseScale = _currentScale;
-    _baseOffset = _offset;
-  }
-
-  void _handleScaleUpdate(ScaleUpdateDetails details) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-
-    // Local focal point nikalne ke liye
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox == null) return;
-    
-    // Focal point (jahan fingers hain)
-    final focalPoint = canvasBox.globalToLocal(details.focalPoint);
-
-    setState(() {
-      // 1. Scale Update (Pinch)
-      if (details.scale != 1.0) {
-        // Naya scale calculate karein
-        double newScale = (_baseScale * details.scale).clamp(minScale, maxScale);
-        
-        // Math to keep zoom centered on fingers (Focal Point)
-        // Formula: NewOffset = FocalPoint - (FocalPoint - OldOffset) * (NewScale / OldScale)
-        // Lekin simple approach:
-        
-        final double scaleRatio = newScale / _currentScale;
-        _offset = focalPoint - (focalPoint - _offset) * scaleRatio;
-        _currentScale = newScale;
-      }
-      
-      // 2. Pan Update (Move) via Scale gesture (agar fingers move kar rahi hain)
-      // Note: Agar aap sirf pinch chahte hain toh pan logic PointerSignal (scroll) mein already hai.
-      // Lekin ScaleUpdate mein bhi pan data aata hai.
-      else if (details.scale == 1.0) {
-         // Agar user sirf drag kar raha hai bina pinch kiye
-         _offset += details.focalPointDelta;
-      }
-    });
-  }
-  
-  void _handleScaleEnd(ScaleEndDetails details) {
-     // Yahan kuch karne ki khaas zaroorat nahi, unless aap inertia chahte hain
-  }
-
-  
-  void _updateScaleAtPoint(double newScale, Offset focalPoint) {
-    final oldScale = _currentScale;
-    if ((oldScale - newScale).abs() < 0.001) return;
-
-    final worldX = (focalPoint.dx - _offset.dx) / oldScale;
-    final worldY = (focalPoint.dy - _offset.dy) / oldScale;
-
-    setState(() {
-      _offset = Offset(
-        focalPoint.dx - worldX * newScale,
-        focalPoint.dy - worldY * newScale,
-      );
-      _currentScale = newScale;
-    });
-  }
+  // ==================== ZOOM & PAN (Controlled via TransformationController) ====================
 
   void _zoomIn() {
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox != null) {
-      final center = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-      _updateScaleAtPoint((_currentScale + zoomStep).clamp(minScale, maxScale), center);
+    final matrix = _transformationController.value.clone();
+    final currentScale = matrix.getMaxScaleOnAxis();
+    if (currentScale < maxScale) {
+       // Zoom centered logic usually requires complex matrix math, 
+       // but simple scaling works for basic needs
+       matrix.scale(1.2); 
+       _transformationController.value = matrix;
     }
   }
 
   void _zoomOut() {
-    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-    if (canvasBox != null) {
-      final center = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
-      _updateScaleAtPoint((_currentScale - zoomStep).clamp(minScale, maxScale), center);
+    final matrix = _transformationController.value.clone();
+    final currentScale = matrix.getMaxScaleOnAxis();
+    if (currentScale > minScale) {
+       matrix.scale(0.8);
+       _transformationController.value = matrix;
     }
   }
 
-  void _zoomTowardPoint(double deltaScale, Offset focalPoint) {
-    _updateScaleAtPoint((_currentScale + deltaScale).clamp(minScale, maxScale), focalPoint);
+  void _resetView() {
+    _transformationController.value = Matrix4.identity();
   }
 
   Offset _globalToLocal(Offset globalPosition) {
+    // Note: With InteractiveViewer, we need to be careful. 
+    // Usually localPosition from events is enough if the listener is inside the viewer.
     final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
     return canvasBox?.globalToLocal(globalPosition) ?? globalPosition;
   }
@@ -282,7 +230,10 @@ void _handleScaleStart(ScaleStartDetails details) {
   }
 
   void _onPortDragStart(int cardIndex, PortSide side, Offset globalPosition, {int? setVarIndex}) {
-    final localPos = _globalToLocal(globalPosition);
+    // Important: Use the local position relative to the Canvas Stack
+    final RenderBox canvasBox = _canvasKey.currentContext!.findRenderObject() as RenderBox;
+    final localPos = canvasBox.globalToLocal(globalPosition);
+    
     setState(() {
       _dragFromCardIndex = cardIndex;
       _dragFromPortSide = side;
@@ -293,7 +244,9 @@ void _handleScaleStart(ScaleStartDetails details) {
   }
 
   void _onPortDragUpdate(Offset globalPosition) {
-    final localPos = _globalToLocal(globalPosition);
+    final RenderBox canvasBox = _canvasKey.currentContext!.findRenderObject() as RenderBox;
+    final localPos = canvasBox.globalToLocal(globalPosition);
+    
     setState(() {
       _dragCurrentPosition = localPos;
       _nearestTargetPort = _findNearestPort(localPos);
@@ -356,9 +309,11 @@ void _handleScaleStart(ScaleStartDetails details) {
 
       final card = _cards[i];
       final cardHeight = baseCardHeight + (card.setVariables.length * setVarRowHeight);
-      final cardX = card.position.dx * _currentScale + _offset.dx + (12.0 * _currentScale);
-      final cardY = card.position.dy * _currentScale + _offset.dy;
-      final cardRect = Rect.fromLTWH(cardX, cardY, 200.0 * _currentScale, cardHeight * _currentScale);
+      
+      // Removed manual scale/offset logic for hit testing
+      final cardX = card.position.dx + 12.0;
+      final cardY = card.position.dy;
+      final cardRect = Rect.fromLTWH(cardX, cardY, 200.0, cardHeight);
 
       if (_dragFromPortSide != PortSide.left) {
         final portPos = _getPortPosition(card, PortSide.left);
@@ -394,16 +349,17 @@ void _handleScaleStart(ScaleStartDetails details) {
     const leftPortX = 12.0, leftPortY = 104.0;
     const rightPortX = 212.0, sectionsTotal = 156.0, setVarRowHeight = 36.0, portCenterOffset = 20.0;
 
-    final cardX = card.position.dx * _currentScale + _offset.dx;
-    final cardY = card.position.dy * _currentScale + _offset.dy;
+    // Removed manual scale/offset logic - using pure logical coordinates
+    final cardX = card.position.dx;
+    final cardY = card.position.dy;
 
     if (side == PortSide.left) {
-      return Offset(cardX + leftPortX * _currentScale, cardY + leftPortY * _currentScale);
+      return Offset(cardX + leftPortX, cardY + leftPortY);
     } else {
       final portY = portIndex != null 
           ? sectionsTotal + (portIndex * setVarRowHeight) + portCenterOffset
           : leftPortY;
-      return Offset(cardX + rightPortX * _currentScale, cardY + portY * _currentScale);
+      return Offset(cardX + rightPortX, cardY + portY);
     }
   }
 
@@ -480,9 +436,14 @@ void _handleScaleStart(ScaleStartDetails details) {
     setState(() {
       _cards = List<DraggableCard>.from(state.cards.map((c) => c.copy()));
       _connections = List<Connection>.from(state.connections.map((c) => c.copy()));
-      _currentScale = state.scale;
-      _offset = state.offset;
       _updateConnectedPorts();
+      
+      // Update transformation controller to restore zoom/pan
+      // Note: This is a simple restoration, restoring exact Offset in Viewer might require complex matrix math
+      // For now, we restore the scale.
+      final matrix = Matrix4.identity();
+      matrix.scale(state.scale);
+      _transformationController.value = matrix;
     });
   }
 
@@ -499,6 +460,11 @@ void _handleScaleStart(ScaleStartDetails details) {
   void _handleAddCard(String title, IconData icon) async {
     final iconKey = _getIconKeyFromData(icon);
 
+    // Calculate center of current view for new card placement
+    // Since we removed manual offsets, we'd need to calculate based on viewport.
+    // For simplicity, we place near the last card or fixed offset.
+    final basePos = Offset(100 + (_cards.length * 50), 100 + (_cards.length * 50));
+
     if (title == 'Add Event') {
       final result = await showDialog<List<ConfiguredEvent>>(
         context: context,
@@ -512,7 +478,7 @@ void _handleScaleStart(ScaleStartDetails details) {
         }).join('\n\n');
 
         setState(() => _cards.add(DraggableCard(
-          position: Offset(100 + (_cards.length * 50), 100 + (_cards.length * 50)),
+          position: basePos,
           title: 'Add Event',
           iconKey: iconKey,
           textContent: eventSummaries,
@@ -522,7 +488,7 @@ void _handleScaleStart(ScaleStartDetails details) {
       }
     } else {
       setState(() => _cards.add(DraggableCard(
-        position: Offset(100 + (_cards.length * 50), 100 + (_cards.length * 50)),
+        position: basePos,
         title: title,
         iconKey: iconKey,
         textContent: '',
@@ -588,11 +554,9 @@ void _handleScaleStart(ScaleStartDetails details) {
               ?.map((j) => Connection.fromJson(j))
               .toList() ?? [];
           _currentScale = (canvasData['canvas_scale'] as num?)?.toDouble() ?? 1.0;
-          final offsetData = canvasData['canvas_offset'] as Map<String, dynamic>? ?? {};
-          _offset = Offset(
-            (offsetData['dx'] as num?)?.toDouble() ?? 0.0,
-            (offsetData['dy'] as num?)?.toDouble() ?? 0.0,
-          );
+          
+          // Note: Restoring offset exactly in InteractiveViewer requires Matrix restoration
+          // which we are skipping for simplicity, resetting to identity with scale.
           _updateConnectedPorts();
         });
       }
@@ -705,37 +669,34 @@ void _handleScaleStart(ScaleStartDetails details) {
   }
 
   Widget _buildCanvas() {
-    return ClipRect(
-      child: MouseRegion(
-        cursor: _draggedCardIndex != null
-            ? SystemMouseCursors.grabbing
-            : (!_isCanvasLocked && !_isMagicBuilderActive)
-                ? SystemMouseCursors.grab
-                : SystemMouseCursors.basic,
-        child: Listener(
-          onPointerDown: _handlePointerDown,
-          onPointerMove: _handlePointerMove,
-          onPointerUp: _handlePointerUp,
-          onPointerCancel: _handlePointerCancel,
-          onPointerSignal: _handlePointerSignal,
-          onPointerPanZoomStart: _handlePanZoomStart,
-        onPointerPanZoomUpdate: _handlePanZoomUpdate,
+    return InteractiveViewer(
+      transformationController: _transformationController,
+      minScale: minScale,
+      maxScale: maxScale,
+      boundaryMargin: const EdgeInsets.all(double.infinity),
+      constrained: false, // Critical for infinite scroll
+      trackpadScrollCausesScale: true, // This enables trackpad pinch zoom
+      child: SizedBox(
+        width: 10000, // Very large virtual canvas area
+        height: 10000,
+        child: MouseRegion(
+          cursor: _draggedCardIndex != null
+              ? SystemMouseCursors.grabbing
+              : (!_isCanvasLocked && !_isMagicBuilderActive)
+                  ? SystemMouseCursors.grab
+                  : SystemMouseCursors.basic,
           child: GestureDetector(
-    // onPanUpdate: _handlePanUpdate, // <-- Yeh line hata dein
-  
-  // Yeh 3 lines add karein:
-  onScaleStart: _handleScaleStart,
-  onScaleUpdate: _handleScaleUpdate,
-  onScaleEnd: _handleScaleEnd,
+            // We use GestureDetector to handle taps/drags on empty space if needed
+            // But main interaction is in the children
             child: MouseRegion(
               onHover: (event) => _onConnectionHover(event.localPosition),
               child: Stack(
                 key: _canvasKey,
-                clipBehavior: Clip.hardEdge,
+                clipBehavior: Clip.none,
                 children: [
-                  // Background grid - must be Positioned.fill to take full size
+                  // Background grid
                   Positioned.fill(
-                    child: InfiniteDotGrid(scale: _currentScale, offset: _offset),
+                    child: InfiniteDotGrid(scale: 1.0, offset: Offset.zero), // Pass 1.0, Viewer scales it
                   ),
                   
                   // Connection lines layer
@@ -748,8 +709,8 @@ void _handleScaleStart(ScaleStartDetails details) {
                             painter: ConnectionPainter(
                               connections: _connections,
                               cards: _cards,
-                              scale: _currentScale,
-                              offset: _offset,
+                              scale: 1.0, // Scale 1.0
+                              offset: Offset.zero, // Offset Zero
                               hoveredConnectionId: _hoveredConnectionId,
                               draggedCardIndex: _draggedCardIndex,
                               dragOffset: dragOffset,
@@ -774,7 +735,7 @@ void _handleScaleStart(ScaleStartDetails details) {
                             dragStartPosition: _dragStartPosition,
                             dragCurrentPosition: _dragCurrentPosition,
                             nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
-                            scale: _currentScale,
+                            scale: 1.0, // Scale 1.0
                           ),
                         ),
                       ),
@@ -818,121 +779,6 @@ void _handleScaleStart(ScaleStartDetails details) {
     );
   }
 
-  // ==================== POINTER EVENT HANDLERS ====================
-// ==================== TRACKPAD PINCH HANDLERS ====================
-
-  void _handlePanZoomStart(PointerPanZoomStartEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    // Current scale ko base bana lein jab gesture shuru ho
-    _baseScale = _currentScale;
-  }
-
-  void _handlePanZoomUpdate(PointerPanZoomUpdateEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-
-    // Trackpad pinch se 'scale' value milti hai
-    // event.scale usually 1.0 se start hoti hai aur expand karne par barhti hai
-    
-    if (event.scale != 1.0) {
-      final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
-      if (canvasBox == null) return;
-
-      // Jis jagah fingers hain wahan focus karein
-      final focalPoint = canvasBox.globalToLocal(event.position);
-
-      setState(() {
-        double newScale = (_baseScale * event.scale).clamp(minScale, maxScale);
-        
-        // Zoom calculation (Same logic as before)
-        final double scaleRatio = newScale / _currentScale;
-        _offset = focalPoint - (focalPoint - _offset) * scaleRatio;
-        _currentScale = newScale;
-      });
-    }
-  }
-  void _handlePointerDown(PointerDownEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    _touchPositions[event.pointer] = event.position;
-    if (_touchPositions.length == 2) {
-      _lastPinchDistance = _calculatePinchDistance();
-    }
-  }
-
-  void _handlePointerMove(PointerMoveEvent event) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    _touchPositions[event.pointer] = event.position;
-    
-    if (_touchPositions.length == 2) {
-      final currentDistance = _calculatePinchDistance();
-      if (_lastPinchDistance > 0) {
-        final scaleChange = currentDistance / _lastPinchDistance;
-        final newScale = (_currentScale * scaleChange).clamp(minScale, maxScale);
-        if (newScale != _currentScale) {
-          final focalPoint = _calculateFocalPoint();
-          _updateScaleAtPoint(newScale, focalPoint);
-        }
-      }
-      _lastPinchDistance = currentDistance;
-    }
-  }
-
-  void _handlePointerUp(PointerUpEvent event) {
-    _touchPositions.remove(event.pointer);
-    if (_touchPositions.isEmpty) {
-      _lastPinchDistance = 0.0;
-    } else if (_touchPositions.length == 2) {
-      _lastPinchDistance = _calculatePinchDistance();
-    }
-    
-    // Handle connection creation
-    if (_nearestTargetPort != null && _dragFromPortSide != null && _dragFromCardIndex != null) {
-      _onPortDragEnd(_dragFromCardIndex!, _dragFromPortSide!);
-    }
-  }
-
-  void _handlePointerCancel(PointerCancelEvent event) {
-    _touchPositions.remove(event.pointer);
-    if (_touchPositions.isEmpty) {
-      _lastPinchDistance = 0.0;
-    }
-    if (_dragStartPosition != null) {
-      _resetDragState();
-    }
-  }
-
- // Is function ko replace karein
-void _handlePointerSignal(PointerSignalEvent event) {
-  if (_isMagicBuilderActive || _isCanvasLocked) return;
-  
-  if (event is PointerScrollEvent) {
-    // Zoom logic ko hata kar Pan logic lagayi hai
-    setState(() {
-      // Scroll delta ko minus kiya hai taake direction natural feel ho
-      _offset -= event.scrollDelta; 
-    });
-  }
-}
-
-  void _handlePanUpdate(DragUpdateDetails details) {
-    if (_isMagicBuilderActive || _isCanvasLocked) return;
-    setState(() => _offset += details.delta);
-  }
-
-  double _calculatePinchDistance() {
-    if (_touchPositions.length < 2) return 0.0;
-    final positions = _touchPositions.values.toList();
-    return (positions[0] - positions[1]).distance;
-  }
-
-  Offset _calculateFocalPoint() {
-    if (_touchPositions.length < 2) return Offset.zero;
-    final positions = _touchPositions.values.toList();
-    return Offset(
-      (positions[0].dx + positions[1].dx) / 2,
-      (positions[0].dy + positions[1].dy) / 2,
-    );
-  }
-
   void _onConnectionHover(Offset position) {
     if (_dragFromCardIndex != null || _connections.isEmpty) return;
     
@@ -954,8 +800,9 @@ void _handlePointerSignal(PointerSignalEvent event) {
 
   bool _isNearConnection(Offset point, Offset start, Offset end, PortSide fromSide, PortSide toSide) {
     const threshold = 15.0;
-    final gap = 40.0 * _currentScale;
-    final clearance = 120.0 * _currentScale;
+    // Gap logic without extra scaling since Viewer scales everything
+    final gap = 40.0; 
+    final clearance = 120.0;
     
     final startX = fromSide == PortSide.right ? start.dx + gap : start.dx - gap;
     final endX = toSide == PortSide.left ? end.dx - gap : end.dx + gap;
@@ -1011,27 +858,20 @@ void _handlePointerSignal(PointerSignalEvent event) {
           key: ValueKey('card_$index'),
           valueListenable: _currentDragOffset,
           builder: (_, dragOffset, child) => Positioned(
-            left: card.position.dx * _currentScale + _offset.dx + dragOffset.dx,
-            top: card.position.dy * _currentScale + _offset.dy + dragOffset.dy,
+            // DIVIDE dragOffset by scale so the movement speed is consistent at any zoom level
+            left: card.position.dx + (dragOffset.dx / _currentScale),
+            top: card.position.dy + (dragOffset.dy / _currentScale),
             child: child!,
           ),
-          child: Transform.scale(
-            scale: _currentScale,
-            alignment: Alignment.topLeft,
-            child: _buildCardWidget(card, index),
-          ),
+          child: _buildCardWidget(card, index),
         );
       }
 
       return Positioned(
         key: ValueKey('card_$index'),
-        left: card.position.dx * _currentScale + _offset.dx,
-        top: card.position.dy * _currentScale + _offset.dy,
-        child: Transform.scale(
-          scale: _currentScale,
-          alignment: Alignment.topLeft,
-          child: _buildCardWidget(card, index),
-        ),
+        left: card.position.dx,
+        top: card.position.dy,
+        child: _buildCardWidget(card, index),
       );
     }).toList();
   }
@@ -1047,7 +887,7 @@ void _handlePointerSignal(PointerSignalEvent event) {
         card: card,
         index: index,
         isSelected: _selectedCard == _cards[index],
-        currentScale: _currentScale,
+        currentScale: 1.0, // Pass 1.0 because Viewer scales the view
         onPanStart: (details) {
           _draggedCardIndex = index;
           _currentDragOffset.value = Offset.zero;
@@ -1057,11 +897,12 @@ void _handlePointerSignal(PointerSignalEvent event) {
         onCardSelected: () => setState(() => _selectedCard = _cards[index]),
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
-            _currentDragOffset.value += details.delta * _currentScale;
+            _currentDragOffset.value += details.delta; // Accumulate delta
           }
         },
         onPanEnd: (details) {
           if (_draggedCardIndex == index) {
+             // Apply offset permanently, adjusted by scale
             _cards[index].position += Offset(
               _currentDragOffset.value.dx / _currentScale,
               _currentDragOffset.value.dy / _currentScale,
@@ -1168,8 +1009,8 @@ void _handlePointerSignal(PointerSignalEvent event) {
   }
 
   Offset _getOrthogonalMidpoint(Offset start, Offset end, PortSide fromSide, PortSide toSide) {
-    final gap = 40.0 * _currentScale;
-    final clearance = 120.0 * _currentScale;
+    final gap = 40.0;
+    final clearance = 120.0;
     final startX = fromSide == PortSide.right ? start.dx + gap : start.dx - gap;
     final endX = toSide == PortSide.left ? end.dx - gap : end.dx + gap;
 
@@ -1193,10 +1034,7 @@ void _handlePointerSignal(PointerSignalEvent event) {
         child: CanvasBottomToolbar(
           onZoomIn: _zoomIn,
           onZoomOut: _zoomOut,
-          onResetView: () => setState(() {
-            _currentScale = 1.0;
-            _offset = Offset.zero;
-          }),
+          onResetView: _resetView,
           onUndo: _history.isNotEmpty ? _undo : null,
           onRedo: _redoStack.isNotEmpty ? _redo : null,
           onAddCardWithType: _handleAddCard,
