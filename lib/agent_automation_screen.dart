@@ -688,7 +688,7 @@ void _onTransformationChanged() {
         },
         child: InteractiveViewer(
           transformationController: _transformationController,  minScale: minScale,
-          maxScale: maxScale,scaleFactor: 1000.0,
+          maxScale: maxScale,
           boundaryMargin: const EdgeInsets.all(0),
           child:ClipRect(
           child: MouseRegion(
