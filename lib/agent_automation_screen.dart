@@ -689,7 +689,7 @@ void _onTransformationChanged() {
         child: InteractiveViewer(
           transformationController: _transformationController,  minScale: minScale,
           maxScale: maxScale,
-          boundaryMargin: const EdgeInsets.all(double.infinity),
+          boundaryMargin: const EdgeInsets.all(0),
           child:ClipRect(
           child: MouseRegion(
             cursor: _draggedCardIndex != null
