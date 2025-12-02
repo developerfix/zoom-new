@@ -50,8 +50,7 @@ class AgentAutomationScreen extends StatefulWidget {
 }
 
 class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
-  // Canvas transform state - Controlled by InteractiveViewer
-  final TransformationController _transformationController = TransformationController();
+  // Canvas transform state
   double _currentScale = 1.0;
   Offset _offset = Offset.zero;
   
@@ -89,6 +88,10 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   final _rightPanelKey = GlobalKey<RightPanelState>();
   GlobalSettings _globalSettings = GlobalSettings();
   
+  // Scale gesture tracking
+  final Map<int, Offset> _touchPositions = {};
+  double _lastPinchDistance = 0.0;
+
   // Cards and connections
   List<DraggableCard> _cards = [
     DraggableCard(position: Offset(100, 100), title: 'Card 1', zIndex: 0),
@@ -100,24 +103,15 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   // Constants
   static const double minScale = 0.1;
   static const double maxScale = 5.0;
+  static const double zoomStep = 0.2;
 
   @override
   void initState() {
     super.initState();
-    // Sync TransformationController updates to local state variables
-    _transformationController.addListener(() {
-      setState(() {
-        _currentScale = _transformationController.value.getMaxScaleOnAxis();
-        // Extract translation from matrix
-        final translation = _transformationController.value.getTranslation();
-        _offset = Offset(translation.x, translation.y);
-      });
-    });
   }
 
   @override
   void dispose() {
-    _transformationController.dispose();
     _historyDebounceTimer?.cancel();
     _currentDragOffset.dispose();
     super.dispose();
@@ -131,35 +125,45 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     }
   }
 
-  // ==================== ZOOM & PAN (Controlled via TransformationController) ====================
+  // ==================== ZOOM & PAN ====================
+
+  void _updateScaleAtPoint(double newScale, Offset focalPoint) {
+    final oldScale = _currentScale;
+    if ((oldScale - newScale).abs() < 0.001) return;
+
+    final worldX = (focalPoint.dx - _offset.dx) / oldScale;
+    final worldY = (focalPoint.dy - _offset.dy) / oldScale;
+
+    setState(() {
+      _offset = Offset(
+        focalPoint.dx - worldX * newScale,
+        focalPoint.dy - worldY * newScale,
+      );
+      _currentScale = newScale;
+    });
+  }
 
   void _zoomIn() {
-    final matrix = _transformationController.value.clone();
-    final currentScale = matrix.getMaxScaleOnAxis();
-    if (currentScale < maxScale) {
-       // Zoom centered logic usually requires complex matrix math, 
-       // but simple scaling works for basic needs
-       matrix.scale(1.2); 
-       _transformationController.value = matrix;
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox != null) {
+      final center = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+      _updateScaleAtPoint((_currentScale + zoomStep).clamp(minScale, maxScale), center);
     }
   }
 
   void _zoomOut() {
-    final matrix = _transformationController.value.clone();
-    final currentScale = matrix.getMaxScaleOnAxis();
-    if (currentScale > minScale) {
-       matrix.scale(0.8);
-       _transformationController.value = matrix;
+    final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox != null) {
+      final center = Offset(canvasBox.size.width / 2, canvasBox.size.height / 2);
+      _updateScaleAtPoint((_currentScale - zoomStep).clamp(minScale, maxScale), center);
     }
   }
 
-  void _resetView() {
-    _transformationController.value = Matrix4.identity();
+  void _zoomTowardPoint(double deltaScale, Offset focalPoint) {
+    _updateScaleAtPoint((_currentScale + deltaScale).clamp(minScale, maxScale), focalPoint);
   }
 
   Offset _globalToLocal(Offset globalPosition) {
-    // Note: With InteractiveViewer, we need to be careful. 
-    // Usually localPosition from events is enough if the listener is inside the viewer.
     final RenderBox? canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
     return canvasBox?.globalToLocal(globalPosition) ?? globalPosition;
   }
@@ -230,10 +234,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   void _onPortDragStart(int cardIndex, PortSide side, Offset globalPosition, {int? setVarIndex}) {
-    // Important: Use the local position relative to the Canvas Stack
-    final RenderBox canvasBox = _canvasKey.currentContext!.findRenderObject() as RenderBox;
-    final localPos = canvasBox.globalToLocal(globalPosition);
-    
+    final localPos = _globalToLocal(globalPosition);
     setState(() {
       _dragFromCardIndex = cardIndex;
       _dragFromPortSide = side;
@@ -244,9 +245,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   void _onPortDragUpdate(Offset globalPosition) {
-    final RenderBox canvasBox = _canvasKey.currentContext!.findRenderObject() as RenderBox;
-    final localPos = canvasBox.globalToLocal(globalPosition);
-    
+    final localPos = _globalToLocal(globalPosition);
     setState(() {
       _dragCurrentPosition = localPos;
       _nearestTargetPort = _findNearestPort(localPos);
@@ -309,11 +308,9 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
       final card = _cards[i];
       final cardHeight = baseCardHeight + (card.setVariables.length * setVarRowHeight);
-      
-      // Removed manual scale/offset logic for hit testing
-      final cardX = card.position.dx + 12.0;
-      final cardY = card.position.dy;
-      final cardRect = Rect.fromLTWH(cardX, cardY, 200.0, cardHeight);
+      final cardX = card.position.dx * _currentScale + _offset.dx + (12.0 * _currentScale);
+      final cardY = card.position.dy * _currentScale + _offset.dy;
+      final cardRect = Rect.fromLTWH(cardX, cardY, 200.0 * _currentScale, cardHeight * _currentScale);
 
       if (_dragFromPortSide != PortSide.left) {
         final portPos = _getPortPosition(card, PortSide.left);
@@ -349,17 +346,16 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     const leftPortX = 12.0, leftPortY = 104.0;
     const rightPortX = 212.0, sectionsTotal = 156.0, setVarRowHeight = 36.0, portCenterOffset = 20.0;
 
-    // Removed manual scale/offset logic - using pure logical coordinates
-    final cardX = card.position.dx;
-    final cardY = card.position.dy;
+    final cardX = card.position.dx * _currentScale + _offset.dx;
+    final cardY = card.position.dy * _currentScale + _offset.dy;
 
     if (side == PortSide.left) {
-      return Offset(cardX + leftPortX, cardY + leftPortY);
+      return Offset(cardX + leftPortX * _currentScale, cardY + leftPortY * _currentScale);
     } else {
       final portY = portIndex != null 
           ? sectionsTotal + (portIndex * setVarRowHeight) + portCenterOffset
           : leftPortY;
-      return Offset(cardX + rightPortX, cardY + portY);
+      return Offset(cardX + rightPortX * _currentScale, cardY + portY * _currentScale);
     }
   }
 
@@ -436,14 +432,9 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     setState(() {
       _cards = List<DraggableCard>.from(state.cards.map((c) => c.copy()));
       _connections = List<Connection>.from(state.connections.map((c) => c.copy()));
+      _currentScale = state.scale;
+      _offset = state.offset;
       _updateConnectedPorts();
-      
-      // Update transformation controller to restore zoom/pan
-      // Note: This is a simple restoration, restoring exact Offset in Viewer might require complex matrix math
-      // For now, we restore the scale.
-      final matrix = Matrix4.identity();
-      matrix.scale(state.scale);
-      _transformationController.value = matrix;
     });
   }
 
@@ -460,11 +451,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   void _handleAddCard(String title, IconData icon) async {
     final iconKey = _getIconKeyFromData(icon);
 
-    // Calculate center of current view for new card placement
-    // Since we removed manual offsets, we'd need to calculate based on viewport.
-    // For simplicity, we place near the last card or fixed offset.
-    final basePos = Offset(100 + (_cards.length * 50), 100 + (_cards.length * 50));
-
     if (title == 'Add Event') {
       final result = await showDialog<List<ConfiguredEvent>>(
         context: context,
@@ -478,7 +464,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
         }).join('\n\n');
 
         setState(() => _cards.add(DraggableCard(
-          position: basePos,
+          position: Offset(100 + (_cards.length * 50), 100 + (_cards.length * 50)),
           title: 'Add Event',
           iconKey: iconKey,
           textContent: eventSummaries,
@@ -488,7 +474,7 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
       }
     } else {
       setState(() => _cards.add(DraggableCard(
-        position: basePos,
+        position: Offset(100 + (_cards.length * 50), 100 + (_cards.length * 50)),
         title: title,
         iconKey: iconKey,
         textContent: '',
@@ -554,9 +540,11 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
               ?.map((j) => Connection.fromJson(j))
               .toList() ?? [];
           _currentScale = (canvasData['canvas_scale'] as num?)?.toDouble() ?? 1.0;
-          
-          // Note: Restoring offset exactly in InteractiveViewer requires Matrix restoration
-          // which we are skipping for simplicity, resetting to identity with scale.
+          final offsetData = canvasData['canvas_offset'] as Map<String, dynamic>? ?? {};
+          _offset = Offset(
+            (offsetData['dx'] as num?)?.toDouble() ?? 0.0,
+            (offsetData['dy'] as num?)?.toDouble() ?? 0.0,
+          );
           _updateConnectedPorts();
         });
       }
@@ -669,126 +657,189 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   Widget _buildCanvas() {
-    return Positioned.fill(
-      child: Listener(
-         onPointerSignal: (pointerSignal) {
-        if (pointerSignal is PointerScaleEvent) {
-          final scale = pointerSignal.scale;
-          final matrix = _transformationController.value.clone();
-          matrix.scale(scale);
-          _transformationController.value = matrix;
-        }
-      },  
-        child: InteractiveViewer(
-          transformationController: _transformationController,
-          minScale: minScale,
-          maxScale: maxScale,
-          boundaryMargin: const EdgeInsets.all(double.infinity),
-          constrained: false, // Critical for infinite scroll
-          trackpadScrollCausesScale: true, // This enables trackpad pinch zoom
-          
-          child: SizedBox(
-            width: 10000, // Very large virtual canvas area
-            height: 10000,
+    return ClipRect(
+      child: MouseRegion(
+        cursor: _draggedCardIndex != null
+            ? SystemMouseCursors.grabbing
+            : (!_isCanvasLocked && !_isMagicBuilderActive)
+                ? SystemMouseCursors.grab
+                : SystemMouseCursors.basic,
+        child: Listener(
+          onPointerDown: _handlePointerDown,
+          onPointerMove: _handlePointerMove,
+          onPointerUp: _handlePointerUp,
+          onPointerCancel: _handlePointerCancel,
+          onPointerSignal: _handlePointerSignal,
+          child: GestureDetector(
+            onPanUpdate: _handlePanUpdate,
             child: MouseRegion(
-              cursor: _draggedCardIndex != null
-                  ? SystemMouseCursors.grabbing
-                  : (!_isCanvasLocked && !_isMagicBuilderActive)
-                      ? SystemMouseCursors.grab
-                      : SystemMouseCursors.basic,
-              child: GestureDetector(
-                // We use GestureDetector to handle taps/drags on empty space if needed
-                // But main interaction is in the children
-                child: MouseRegion(
-                  onHover: (event) => _onConnectionHover(event.localPosition),
-                  child: Stack(
-                    key: _canvasKey,
-                    clipBehavior: Clip.none,
-                    children: [
-                      // Background grid
-                      Positioned.fill(
-                        child: InfiniteDotGrid(scale: 1.0, offset: Offset.zero), // Pass 1.0, Viewer scales it
-                      ),
-                      
-                      // Connection lines layer
-                      Positioned.fill(
-                        child: RepaintBoundary(
-                          child: IgnorePointer(
-                            child: ValueListenableBuilder<Offset>(
-                              valueListenable: _currentDragOffset,
-                              builder: (_, dragOffset, __) => CustomPaint(
-                                painter: ConnectionPainter(
-                                  connections: _connections,
-                                  cards: _cards,
-                                  scale: 1.0, // Scale 1.0
-                                  offset: Offset.zero, // Offset Zero
-                                  hoveredConnectionId: _hoveredConnectionId,
-                                  draggedCardIndex: _draggedCardIndex,
-                                  dragOffset: dragOffset,
-                                ),
-                                isComplex: true,
-                                willChange: _draggedCardIndex != null,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      
-                      // Cards layer
-                      ..._buildSortedCards(),
-                      
-                      // Drag line layer
-                      if (_dragStartPosition != null)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: CustomPaint(
-                              painter: DragLinePainter(
-                                dragStartPosition: _dragStartPosition,
-                                dragCurrentPosition: _dragCurrentPosition,
-                                nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
-                                scale: 1.0, // Scale 1.0
-                              ),
-                            ),
-                          ),
-                        ),
-                      
-                      // Delete button for hovered connection
-                      if (_hoveredConnectionId != null) _buildDeleteButton(),
-                      
-                      // Magic Builder overlay
-                      if (_isMagicBuilderActive)
-                        FrostedGlassOverlay(
-                          isVisible: true,
-                          onClose: () => setState(() => _isMagicBuilderActive = false),
-                        ),
-                      
-                      // Mobile Magic Builder button
-                      if (MediaQuery.sizeOf(context).width < 700)
-                        Positioned(
-                          top: 16,
-                          left: 16,
-                          child: _buildMobileMenuButton(),
-                        ),
-                      
-                      // Right panel toggle
-                      Positioned(
-                        top: 16,
-                        right: 16,
-                        child: FloatingActionButton(
-                          heroTag: 'right-panel-toggle',
-                          mini: true,
-                          onPressed: _toggleRightPanel,
-                          child: Icon(_isRightPanelVisible ? Icons.close : Icons.menu),
-                        ),
-                      ),
-                    ],
+              onHover: (event) => _onConnectionHover(event.localPosition),
+              child: Stack(
+                key: _canvasKey,
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  // Background grid - must be Positioned.fill to take full size
+                  Positioned.fill(
+                    child: InfiniteDotGrid(scale: _currentScale, offset: _offset),
                   ),
-                ),
+                  
+                  // Connection lines layer
+                  Positioned.fill(
+                    child: RepaintBoundary(
+                      child: IgnorePointer(
+                        child: ValueListenableBuilder<Offset>(
+                          valueListenable: _currentDragOffset,
+                          builder: (_, dragOffset, __) => CustomPaint(
+                            painter: ConnectionPainter(
+                              connections: _connections,
+                              cards: _cards,
+                              scale: _currentScale,
+                              offset: _offset,
+                              hoveredConnectionId: _hoveredConnectionId,
+                              draggedCardIndex: _draggedCardIndex,
+                              dragOffset: dragOffset,
+                            ),
+                            isComplex: true,
+                            willChange: _draggedCardIndex != null,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  
+                  // Cards layer
+                  ..._buildSortedCards(),
+                  
+                  // Drag line layer
+                  if (_dragStartPosition != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          painter: DragLinePainter(
+                            dragStartPosition: _dragStartPosition,
+                            dragCurrentPosition: _dragCurrentPosition,
+                            nearestPortPosition: _nearestTargetPort?['position'] as Offset?,
+                            scale: _currentScale,
+                          ),
+                        ),
+                      ),
+                    ),
+                  
+                  // Delete button for hovered connection
+                  if (_hoveredConnectionId != null) _buildDeleteButton(),
+                  
+                  // Magic Builder overlay
+                  if (_isMagicBuilderActive)
+                    FrostedGlassOverlay(
+                      isVisible: true,
+                      onClose: () => setState(() => _isMagicBuilderActive = false),
+                    ),
+                  
+                  // Mobile Magic Builder button
+                  if (MediaQuery.sizeOf(context).width < 700)
+                    Positioned(
+                      top: 16,
+                      left: 16,
+                      child: _buildMobileMenuButton(),
+                    ),
+                  
+                  // Right panel toggle
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: FloatingActionButton(
+                      heroTag: 'right-panel-toggle',
+                      mini: true,
+                      onPressed: _toggleRightPanel,
+                      child: Icon(_isRightPanelVisible ? Icons.close : Icons.menu),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  // ==================== POINTER EVENT HANDLERS ====================
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    _touchPositions[event.pointer] = event.position;
+    if (_touchPositions.length == 2) {
+      _lastPinchDistance = _calculatePinchDistance();
+    }
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    _touchPositions[event.pointer] = event.position;
+    
+    if (_touchPositions.length == 2) {
+      final currentDistance = _calculatePinchDistance();
+      if (_lastPinchDistance > 0) {
+        final scaleChange = currentDistance / _lastPinchDistance;
+        final newScale = (_currentScale * scaleChange).clamp(minScale, maxScale);
+        if (newScale != _currentScale) {
+          final focalPoint = _calculateFocalPoint();
+          _updateScaleAtPoint(newScale, focalPoint);
+        }
+      }
+      _lastPinchDistance = currentDistance;
+    }
+  }
+
+  void _handlePointerUp(PointerUpEvent event) {
+    _touchPositions.remove(event.pointer);
+    if (_touchPositions.isEmpty) {
+      _lastPinchDistance = 0.0;
+    } else if (_touchPositions.length == 2) {
+      _lastPinchDistance = _calculatePinchDistance();
+    }
+    
+    // Handle connection creation
+    if (_nearestTargetPort != null && _dragFromPortSide != null && _dragFromCardIndex != null) {
+      _onPortDragEnd(_dragFromCardIndex!, _dragFromPortSide!);
+    }
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    _touchPositions.remove(event.pointer);
+    if (_touchPositions.isEmpty) {
+      _lastPinchDistance = 0.0;
+    }
+    if (_dragStartPosition != null) {
+      _resetDragState();
+    }
+  }
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    if (event is PointerScrollEvent) {
+      final zoomDelta = event.scrollDelta.dy > 0 ? -0.1 : 0.1;
+      _zoomTowardPoint(zoomDelta, event.localPosition);
+    }
+  }
+
+  void _handlePanUpdate(DragUpdateDetails details) {
+    if (_isMagicBuilderActive || _isCanvasLocked) return;
+    setState(() => _offset += details.delta);
+  }
+
+  double _calculatePinchDistance() {
+    if (_touchPositions.length < 2) return 0.0;
+    final positions = _touchPositions.values.toList();
+    return (positions[0] - positions[1]).distance;
+  }
+
+  Offset _calculateFocalPoint() {
+    if (_touchPositions.length < 2) return Offset.zero;
+    final positions = _touchPositions.values.toList();
+    return Offset(
+      (positions[0].dx + positions[1].dx) / 2,
+      (positions[0].dy + positions[1].dy) / 2,
     );
   }
 
@@ -813,9 +864,8 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
 
   bool _isNearConnection(Offset point, Offset start, Offset end, PortSide fromSide, PortSide toSide) {
     const threshold = 15.0;
-    // Gap logic without extra scaling since Viewer scales everything
-    final gap = 40.0; 
-    final clearance = 120.0;
+    final gap = 40.0 * _currentScale;
+    final clearance = 120.0 * _currentScale;
     
     final startX = fromSide == PortSide.right ? start.dx + gap : start.dx - gap;
     final endX = toSide == PortSide.left ? end.dx - gap : end.dx + gap;
@@ -866,56 +916,58 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
     return sortedIndices.map((index) {
       final card = _cards[index];
       
-      if (_draggedCardIndex == index) {
-        return ValueListenableBuilder<Offset>(
-          key: ValueKey('card_$index'),
-          valueListenable: _currentDragOffset,
-          builder: (_, dragOffset, child) => Positioned(
-            // DIVIDE dragOffset by scale so the movement speed is consistent at any zoom level
-            left: card.position.dx + (dragOffset.dx / _currentScale),
-            top: card.position.dy + (dragOffset.dy / _currentScale),
-            child: child!,
-          ),
-          child: _buildCardWidget(card, index),
-        );
-      }
-
+      // FIXED: Ensure Widget structure is consistent between drag and idle states
+      // to prevent GestureDetector from being disposed (rebuilt with new parent).
       return Positioned(
         key: ValueKey('card_$index'),
-        left: card.position.dx,
-        top: card.position.dy,
-        child: _buildCardWidget(card, index),
+        left: card.position.dx * _currentScale + _offset.dx,
+        top: card.position.dy * _currentScale + _offset.dy,
+        child: ValueListenableBuilder<Offset>(
+          valueListenable: _currentDragOffset,
+          builder: (_, dragOffset, child) {
+            // Only apply drag offset if this is the dragged card
+            final effectiveOffset = (_draggedCardIndex == index) ? dragOffset : Offset.zero;
+            return Transform.translate(
+              offset: effectiveOffset,
+              child: child!,
+            );
+          },
+          child: Transform.scale(
+            scale: _currentScale,
+            alignment: Alignment.topLeft,
+            child: _buildCardWidget(card, index),
+          ),
+        ),
       );
     }).toList();
   }
 
   Widget _buildCardWidget(DraggableCard card, int index) {
     return GestureDetector(
-      onTap: () => setState(() {
-        _selectedCard = _cards[index];
-        _hoveredCardIndex = index;
-      }),
+      // onTap: () => setState(() {
+      //   _selectedCard = _cards[index];
+      //   _hoveredCardIndex = index;
+      // }),
       child: DraggableCardWidget(
         key: ValueKey('${card.id}_${card.textContent.hashCode}'),
         card: card,
         index: index,
         isSelected: _selectedCard == _cards[index],
-        currentScale: 1.0, // Pass 1.0 because Viewer scales the view
+        currentScale: _currentScale,
         onPanStart: (details) {
           _draggedCardIndex = index;
           _currentDragOffset.value = Offset.zero;
           _bringToFront(index);
           setState(() {});
         },
-        onCardSelected: () => setState(() => _selectedCard = _cards[index]),
+        // onCardSelected: () => setState(() => _selectedCard = _cards[index]),
         onPanUpdate: (details) {
           if (_draggedCardIndex == index) {
-            _currentDragOffset.value += details.delta; // Accumulate delta
+            _currentDragOffset.value += details.delta * _currentScale;
           }
         },
         onPanEnd: (details) {
           if (_draggedCardIndex == index) {
-             // Apply offset permanently, adjusted by scale
             _cards[index].position += Offset(
               _currentDragOffset.value.dx / _currentScale,
               _currentDragOffset.value.dy / _currentScale,
@@ -1022,8 +1074,8 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
   }
 
   Offset _getOrthogonalMidpoint(Offset start, Offset end, PortSide fromSide, PortSide toSide) {
-    final gap = 40.0;
-    final clearance = 120.0;
+    final gap = 40.0 * _currentScale;
+    final clearance = 120.0 * _currentScale;
     final startX = fromSide == PortSide.right ? start.dx + gap : start.dx - gap;
     final endX = toSide == PortSide.left ? end.dx - gap : end.dx + gap;
 
@@ -1047,7 +1099,10 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
         child: CanvasBottomToolbar(
           onZoomIn: _zoomIn,
           onZoomOut: _zoomOut,
-          onResetView: _resetView,
+          onResetView: () => setState(() {
+            _currentScale = 1.0;
+            _offset = Offset.zero;
+          }),
           onUndo: _history.isNotEmpty ? _undo : null,
           onRedo: _redoStack.isNotEmpty ? _redo : null,
           onAddCardWithType: _handleAddCard,
@@ -1090,6 +1145,6 @@ class _AgentAutomationScreenState extends State<AgentAutomationScreen> {
           ],
         ),
       ),
-    );
+    );  
   }
 }
