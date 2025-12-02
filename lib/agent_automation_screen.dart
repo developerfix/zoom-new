@@ -674,7 +674,13 @@ void _onTransformationChanged() {
 
   Widget _buildCanvas() {
     return Stack(
-      children: [
+      children: [    Positioned.fill(
+        child: InfiniteDotGrid(
+          scale: _currentScale,
+          offset: _offset,
+        ),
+      ),
+
         Positioned.fill(
           child: Listener(
         onPointerSignal: (pointerSignal) {
@@ -712,9 +718,7 @@ void _onTransformationChanged() {
                     clipBehavior: Clip.hardEdge,
                     children: [
                       // Background grid - must be Positioned.fill to take full size
-                      Positioned.fill(
-                        child: InfiniteDotGrid(scale: _currentScale, offset: _offset),
-                      ),
+                    
                       
                       // Connection lines layer
                       Positioned.fill(
